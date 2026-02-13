@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# 检查是否以root权限运行
+if [[ $EUID -ne 0 ]]; then
+   echo "请以root权限运行此脚本。" 
+   exit 1
+fi
+
+# 配置文件路径
+TINYPROXY_CONF="/etc/tinyproxy/tinyproxy.conf"
+TINYPROXY_SERVICE="tinyproxy"
+
+# 显示菜单
+function show_menu() {
+    echo "=== Tinyproxy 管理脚本 ==="
+    echo "1. 安装 Tinyproxy"
+    echo "2. 配置 Tinyproxy"
+    echo "3. 启动 Tinyproxy"
+    echo "4. 停止 Tinyproxy"
+    echo "5. 查看 Tinyproxy 状态"
+    echo "6. 卸载 Tinyproxy"
+    echo "7. 退出"
+    echo "==========================="
+    read -p "请选择一个操作: " option
+}
+
+# 安装 Tinyproxy
+function install_tinyproxy() {
+    echo "正在安装 Tinyproxy..."
+    apt update && apt install -y tinyproxy
+    echo "Tinyproxy 已安装."
+}
+
+# 配置 Tinyproxy
+function configure_tinyproxy() {
+    echo "正在配置 Tinyproxy..."
+    if [[ ! -f "$TINYPROXY_CONF" ]]; then
+        echo "找不到配置文件 $TINYPROXY_CONF，请确认 Tinyproxy 是否已安装。"
+        exit 1
+    fi
+    read -p "请输入允许连接代理的IP地址 (例如: 0.0.0.0/0 允许所有): " allowed_ip
+    allowed_ip=${allowed_ip:-"0.0.0.0/0"}
+    sed -i "/^Allow /d" $TINYPROXY_CONF # 清除旧的Allow配置
+    echo "Allow $allowed_ip" >> $TINYPROXY_CONF
+    echo "您已允许以下IP使用代理: $allowed_ip"
+    read -p "请输入代理监听的端口号 (默认8888): " proxy_port
+    proxy_port=${proxy_port:-8888}
+    sed -i "s/^Port .*$/Port $proxy_port/" $TINYPROXY_CONF
+    echo "代理将监听端口: $proxy_port"
+    # 重启服务以应用新配置
+    systemctl restart $TINYPROXY_SERVICE
+    echo "Tinyproxy 配置完成并已重启服务。"
+}
+
+# 启动 Tinyproxy
+function start_tinyproxy() {
+    echo "正在启动 Tinyproxy..."
+    systemctl start $TINYPROXY_SERVICE
+    echo "Tinyproxy 服务已启动。"
+}
+
+# 停止 Tinyproxy
+function stop_tinyproxy() {
+    echo "正在停止 Tinyproxy..."
+    systemctl stop $TINYPROXY_SERVICE
+    echo "Tinyproxy 服务已停止。"
+}
+
+# 查看 Tinyproxy 状态
+function status_tinyproxy() {
+    echo "正在获取 Tinyproxy 服务状态..."
+    systemctl status $TINYPROXY_SERVICE
+}
+
+# 卸载 Tinyproxy
+function uninstall_tinyproxy() {
+    echo "正在卸载 Tinyproxy..."
+    apt remove -y tinyproxy
+    echo "Tinyproxy 已卸载。"
+}
+
+# 主循环
+while true; do
+    show_menu
+    case $option in
+        1)
+            install_tinyproxy
+            ;;
+        2)
+            configure_tinyproxy
+            ;;
+        3)
+            start_tinyproxy
+            ;;
+        4)
+            stop_tinyproxy
+            ;;
+        5)
+            status_tinyproxy
+            ;;
+        6)
+            uninstall_tinyproxy
+            ;;
+        7)
+            echo "退出脚本。"
+            exit 0
+            ;;
+        *)
+            echo "无效选项，请重试。"
+            ;;
+    esac
+    echo ""
+done
