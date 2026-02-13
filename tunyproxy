@@ -1,0 +1,91 @@
+#!/bin/bash
+
+function install_tinyproxy() {
+    echo "正在安装 TinyProxy..."
+    sudo apt update && sudo apt install -y tinyproxy
+    echo "TinyProxy 安装完成！"
+}
+
+function configure_tinyproxy() {
+    echo "配置 TinyProxy..."
+    echo "请输入 HTTP 代理监听端口（默认：8888）："
+    read -r PORT
+    PORT=${PORT:-8888}
+
+    # 修改配置文件
+    sudo sed -i "s/^Port .*/Port ${PORT}/" /etc/tinyproxy/tinyproxy.conf
+    sudo sed -i "s/^#Allow 127.0.0.1/Allow 127.0.0.1/" /etc/tinyproxy/tinyproxy.conf
+
+    echo "TinyProxy 监听端口已设置为：${PORT}"
+}
+
+function start_tinyproxy() {
+    echo "正在启动 TinyProxy..."
+    sudo systemctl start tinyproxy
+    sudo systemctl enable tinyproxy
+    echo "TinyProxy 已启动！"
+}
+
+function stop_tinyproxy() {
+    echo "正在停止 TinyProxy..."
+    sudo systemctl stop tinyproxy
+    echo "TinyProxy 已停止！"
+}
+
+function restart_tinyproxy() {
+    echo "正在重启 TinyProxy..."
+    sudo systemctl restart tinyproxy
+    echo "TinyProxy 已重启！"
+}
+
+function status_tinyproxy() {
+    echo "TinyProxy 服务状态："
+    sudo systemctl status tinyproxy
+}
+
+function main_menu() {
+    while true; do
+        echo "========================"
+        echo " TinyProxy 管理工具"
+        echo "========================"
+        echo "1. 安装 TinyProxy"
+        echo "2. 配置 TinyProxy"
+        echo "3. 启动 TinyProxy"
+        echo "4. 停止 TinyProxy"
+        echo "5. 重启 TinyProxy"
+        echo "6. 查看 TinyProxy 状态"
+        echo "7. 退出"
+        echo "========================"
+        echo "请选择一个选项（1-7）："
+        read -r CHOICE
+        case $CHOICE in
+        1)
+            install_tinyproxy
+            ;;
+        2)
+            configure_tinyproxy
+            ;;
+        3)
+            start_tinyproxy
+            ;;
+        4)
+            stop_tinyproxy
+            ;;
+        5)
+            restart_tinyproxy
+            ;;
+        6)
+            status_tinyproxy
+            ;;
+        7)
+            echo "退出程序。再见！"
+            break
+            ;;
+        *)
+            echo "无效选项，请重试。"
+            ;;
+        esac
+    done
+}
+
+main_menu
