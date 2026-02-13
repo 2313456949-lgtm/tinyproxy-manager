@@ -2,7 +2,7 @@
 
 # ==================================================
 # Tinyproxy 一键交互式管理脚本
-# Author: 姥舅
+# Author: Gemini
 # Description: Install and manage Tinyproxy easily
 # ==================================================
 
@@ -10,6 +10,7 @@
 RED='\033[31m'
 GREEN='\033[32m'
 YELLOW='\033[33m'
+BLUE='\033[34m'
 PLAIN='\033[0m'
 
 # 配置文件路径
@@ -46,6 +47,67 @@ check_sys() {
     fi
 }
 
+# 显示使用说明
+show_usage_guide() {
+    local server_ip=$(hostname -I | awk '{print $1}')
+    local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    
+    clear
+    echo -e "${GREEN}=================================="
+    echo -e " Tinyproxy 配置完成！${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【代理服务器信息】${PLAIN}"
+    echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
+    echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【Linux 使用命令】${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}1. 临时设置代理 (仅当前终端有效)${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export ftp_proxy=http://$server_ip:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}2. 测试代理是否正常${PLAIN}"
+    echo -e "   ${GREEN}curl -x http://$server_ip:$port http://httpbin.org/ip${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}3. 永久设置代理 (所有用户)${PLAIN}"
+    echo -e "   在 ${BLUE}/etc/profile${PLAIN} 文件末尾添加:"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   然后运行: ${GREEN}source /etc/profile${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}4. 仅为当前用户永久设置${PLAIN}"
+    echo -e "   在 ${BLUE}~/.bashrc${PLAIN} 或 ${BLUE}~/.bash_profile${PLAIN} 末尾添加:"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   然后运行: ${GREEN}source ~/.bashrc${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}5. wget 使用代理${PLAIN}"
+    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=$server_ip:$port https://example.com${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}6. apt-get 使用代理${PLAIN}"
+    echo -e "   ${GREEN}apt-get -o Acquire::http::Proxy=http://$server_ip:$port update${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}7. yum 使用代理${PLAIN}"
+    echo -e "   编辑 ${BLUE}/etc/yum.conf${PLAIN}，添加:"
+    echo -e "   ${GREEN}proxy=http://$server_ip:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}8. pip 使用代理${PLAIN}"
+    echo -e "   ${GREEN}pip install -i https://pypi.org/simple -p http://$server_ip:$port package_name${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}9. Git 使用代理${PLAIN}"
+    echo -e "   ${GREEN}git config --global http.proxy http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}git config --global https.proxy http://$server_ip:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}10. 取消代理设置${PLAIN}"
+    echo -e "    ${GREEN}unset http_proxy${PLAIN}"
+    echo -e "    ${GREEN}unset https_proxy${PLAIN}"
+    echo ""
+    echo -e "${BLUE}==================================${PLAIN}"
+    read -p "按 Enter 键返回主菜单..."
+}
+
 # 安装 Tinyproxy
 install_tinyproxy() {
     echo -e "${GREEN}正在安装 Tinyproxy...${PLAIN}"
@@ -62,8 +124,8 @@ install_tinyproxy() {
         echo -e "${GREEN}Tinyproxy 安装成功！${PLAIN}"
         
         # 创建快捷命令
-        cp "$SCRIPT_PATH" /usr/local/bin/tpmenu
-        chmod +x /usr/local/bin/tpmenu
+        cp "$SCRIPT_PATH" /usr/local/bin/tpmenu 2>/dev/null
+        chmod +x /usr/local/bin/tpmenu 2>/dev/null
         echo -e "${YELLOW}提示: 以后可以直接输入 'tpmenu' 命令来管理。${PLAIN}"
         
         # 初始化配置，备份原配置（加入时间戳避免覆盖）
@@ -75,12 +137,14 @@ install_tinyproxy() {
         sed -i 's/^Allow /#Allow /g' $CONF_FILE
         
         # 启用服务并启动
-        systemctl enable tinyproxy
-        systemctl start tinyproxy
+        systemctl enable tinyproxy 2>/dev/null
+        systemctl start tinyproxy 2>/dev/null
         
+        sleep 2
         configure_proxy
     else
         echo -e "${RED}安装失败，请检查网络或源。${PLAIN}"
+        sleep 3
         exit 1
     fi
 }
@@ -118,7 +182,10 @@ configure_proxy() {
     fi
 
     echo -e "${GREEN}配置已更新。${PLAIN}"
+    sleep 1
     restart_tinyproxy
+    sleep 2
+    show_usage_guide
 }
 
 # 卸载
@@ -137,7 +204,6 @@ uninstall_tinyproxy() {
     rm -f /usr/local/bin/tpmenu
     echo -e "${GREEN}卸载完成。${PLAIN}"
     sleep 2
-    menu
 }
 
 # 管理命令
@@ -177,8 +243,10 @@ restart_tinyproxy() {
 show_status() {
     if systemctl is-active --quiet tinyproxy; then
         port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        local server_ip=$(hostname -I | awk '{print $1}')
         echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
         echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+        echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
         echo -e "允许列表: "
         grep "^Allow " $CONF_FILE || echo " (无显式允许，可能仅限本地或允许所有)"
     else
@@ -193,7 +261,7 @@ view_logs() {
     else
         echo -e "${RED}日志文件不存在，服务可能未启动过。${PLAIN}"
     fi
-    sleep 2
+    sleep 3
 }
 
 add_ip() {
@@ -210,7 +278,6 @@ add_ip() {
             restart_tinyproxy
         fi
     fi
-    sleep 2
 }
 
 modify_port() {
@@ -220,6 +287,8 @@ modify_port() {
     else
         sed -i "s/^Port .*/Port $new_port/" $CONF_FILE
         restart_tinyproxy
+        sleep 2
+        show_usage_guide
     fi
 }
 
@@ -240,9 +309,10 @@ menu() {
     echo -e "7. 添加允许访问的 IP (白名单)"
     echo -e "8. 修改监听端口"
     echo -e "9. 查看最近日志"
+    echo -e "10. 查看使用说明"
     echo -e "0. 退出脚本"
     echo -e "=================================="
-    read -p "请输入选项 [0-9]: " choice
+    read -p "请输入选项 [0-10]: " choice
 
     case $choice in
         1) check_sys; install_tinyproxy ;;
@@ -254,6 +324,7 @@ menu() {
         7) add_ip ;;
         8) modify_port ;;
         9) view_logs ;;
+        10) show_usage_guide ;;
         0) echo -e "${GREEN}退出脚本。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}输入错误，请重新输入。${PLAIN}"; sleep 1; menu ;;
     esac
