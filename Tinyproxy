@@ -51,6 +51,7 @@ check_sys() {
 show_usage_guide() {
     local server_ip=$(hostname -I | awk '{print $1}')
     local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    local allowed_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
     
     clear
     echo -e "${GREEN}=================================="
@@ -60,6 +61,10 @@ show_usage_guide() {
     echo -e "${BLUE}【代理服务器信息】${PLAIN}"
     echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
     echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+    echo -e "允许IP: ${YELLOW}$allowed_ip${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【完整代理地址】${PLAIN}"
+    echo -e "${GREEN}http://$server_ip:$port${PLAIN}"
     echo ""
     echo -e "${BLUE}【Linux 使用命令】${PLAIN}"
     echo ""
@@ -158,27 +163,49 @@ configure_proxy() {
     [[ -z "${port}" ]] && port="8888"
     sed -i "s/^Port .*/Port $port/" $CONF_FILE
     
-    # 设置允许的IP
-    echo -e "请输入允许连接的 IP 地址。"
-    echo -e "1. 允许所有 IP (0.0.0.0/0 - 有安全风险)"
-    echo -e "2. 手动输入特定 IP (例如: 192.168.1.100)"
+    # 设置允许的IP - 默认手动指定
+    echo -e ""
+    echo -e "${YELLOW}请输入允许连接的客户端 IP 地址${PLAIN}"
+    echo -e "1. 手动输入特定 IP (推荐: 例如 192.168.1.100)"
+    echo -e "2. 允许所有 IP (0.0.0.0/0 - 有安全风险)"
     read -p "请选择 (默认 1): " ip_choice
     [[ -z "${ip_choice}" ]] && ip_choice="1"
     
     # 先清除已有的 Allow 规则（除注释外的）
     sed -i '/^Allow /d' $CONF_FILE
 
-    if [[ "${ip_choice}" == "2" ]]; then
-        read -p "请输入允许的 IP 地址: " user_ip
+    if [[ "${ip_choice}" == "1" ]]; then
+        # 手动输入IP
+        read -p "请输入允许的客户端 IP 地址 (例如: 192.168.1.100): " user_ip
         if [[ -z "${user_ip}" ]]; then
-            echo -e "${RED}IP 不能为空，已设置为允许所有。${PLAIN}"
-            echo "Allow 0.0.0.0/0" >> $CONF_FILE
+            echo -e "${RED}错误: IP 不能为空！${PLAIN}"
+            echo -e "${YELLOW}重新设置...${PLAIN}"
+            sleep 1
+            configure_proxy
         else
-            echo "Allow $user_ip" >> $CONF_FILE
+            # 验证IP格式
+            if [[ $user_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                echo "Allow $user_ip" >> $CONF_FILE
+                echo -e "${GREEN}已设置允许的客户端IP: $user_ip${PLAIN}"
+            else
+                echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
+                echo -e "${YELLOW}重新设置...${PLAIN}"
+                sleep 1
+                configure_proxy
+            fi
         fi
     else
-        # 允许所有
-        echo "Allow 0.0.0.0/0" >> $CONF_FILE
+        # 允许所有（需要二次确认）
+        echo -e "${RED}警告: 允许所有IP会降低安全性！${PLAIN}"
+        read -p "确认允许所有IP吗？(y/n，默认 n): " confirm
+        if [[ "${confirm}" == "y" ]] || [[ "${confirm}" == "Y" ]]; then
+            echo "Allow 0.0.0.0/0" >> $CONF_FILE
+            echo -e "${YELLOW}已设置为允许所有IP${PLAIN}"
+        else
+            echo -e "${YELLOW}已取消，重新设置...${PLAIN}"
+            sleep 1
+            configure_proxy
+        fi
     fi
 
     echo -e "${GREEN}配置已更新。${PLAIN}"
@@ -244,11 +271,12 @@ show_status() {
     if systemctl is-active --quiet tinyproxy; then
         port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
         local server_ip=$(hostname -I | awk '{print $1}')
+        allowed_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
         echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
         echo -e "监听端口: ${YELLOW}$port${PLAIN}"
         echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
-        echo -e "允许列表: "
-        grep "^Allow " $CONF_FILE || echo " (无显式允许，可能仅限本地或允许所有)"
+        echo -e "允许客户端IP: ${YELLOW}$allowed_ip${PLAIN}"
+        echo -e "完整代理地址: ${GREEN}http://$server_ip:$port${PLAIN}"
     else
         echo -e "${RED}Tinyproxy 状态: [未运行]${PLAIN}"
     fi
@@ -265,17 +293,22 @@ view_logs() {
 }
 
 add_ip() {
-    read -p "请输入要添加的白名单 IP: " new_ip
+    read -p "请输入要添加的客户端白名单 IP: " new_ip
     if [[ -z "${new_ip}" ]]; then
         echo -e "${RED}IP 不能为空。${PLAIN}"
     else
-        # 检查是否已存在
-        if grep -q "^Allow $new_ip" $CONF_FILE; then
-            echo -e "${YELLOW}此 IP 已存在。${PLAIN}"
+        # 验证IP格式
+        if [[ $new_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            # 检查是否已存在
+            if grep -q "^Allow $new_ip" $CONF_FILE; then
+                echo -e "${YELLOW}此 IP 已存在。${PLAIN}"
+            else
+                echo "Allow $new_ip" >> $CONF_FILE
+                echo -e "${GREEN}已添加 $new_ip${PLAIN}"
+                restart_tinyproxy
+            fi
         else
-            echo "Allow $new_ip" >> $CONF_FILE
-            echo -e "${GREEN}已添加 $new_ip${PLAIN}"
-            restart_tinyproxy
+            echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
         fi
     fi
 }
@@ -304,7 +337,7 @@ menu() {
     echo -e "3. 启动服务"
     echo -e "4. 停止服务"
     echo -e "5. 重启服务"
-    echo -e "6. 查看状态 & 端口"
+    echo -e "6. 查看状态 & 端口 & IP"
     echo -e "----------------------------------"
     echo -e "7. 添加允许访问的 IP (白名单)"
     echo -e "8. 修改监听端口"
@@ -315,18 +348,18 @@ menu() {
     read -p "请输入选项 [0-10]: " choice
 
     case $choice in
-        1) check_sys; install_tinyproxy ;;
-        2) uninstall_tinyproxy ;;
-        3) start_tinyproxy ;;
-        4) stop_tinyproxy ;;
-        5) restart_tinyproxy ;;
-        6) show_status ;;
-        7) add_ip ;;
-        8) modify_port ;;
-        9) view_logs ;;
-        10) show_usage_guide ;;
-        0) echo -e "${GREEN}退出脚本。${PLAIN}"; exit 0 ;;
-        *) echo -e "${RED}输入错误，请重新输入。${PLAIN}"; sleep 1; menu ;;
+        1) check_sys; install_tinyproxy ;; 
+        2) uninstall_tinyproxy ;; 
+        3) start_tinyproxy ;; 
+        4) stop_tinyproxy ;; 
+        5) restart_tinyproxy ;; 
+        6) show_status ;; 
+        7) add_ip ;; 
+        8) modify_port ;; 
+        9) view_logs ;; 
+        10) show_usage_guide ;; 
+        0) echo -e "${GREEN}退出脚本。${PLAIN}"; exit 0 ;; 
+        *) echo -e "${RED}输入错误，请重新输入。${PLAIN}"; sleep 1; menu ;; 
     esac
     
     menu
