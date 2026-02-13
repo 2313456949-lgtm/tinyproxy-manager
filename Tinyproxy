@@ -2,7 +2,7 @@
 
 # ==================================================
 # Tinyproxy 一键交互式管理脚本
-# Author: Gemini
+# Author: lao jiu
 # Description: Install and manage Tinyproxy easily
 # ==================================================
 
@@ -17,6 +17,19 @@ PLAIN='\033[0m'
 CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
 SCRIPT_PATH=$(readlink -f "$0")
 RELEASE=""
+
+# 环境变量初始化（从配置文件读取）
+init_proxy_env() {
+    if [[ -f $CONF_FILE ]]; then
+        PORT=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        CLIENT_IP=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+        
+        if [[ -n "$PORT" ]] && [[ -n "$CLIENT_IP" ]]; then
+            export HTTP_PROXY="http://$CLIENT_IP:$PORT"
+            export HTTPS_PROXY="http://$CLIENT_IP:$PORT"
+        fi
+    fi
+}
 
 # 检查是否为 Root 用户
 check_root() {
@@ -64,7 +77,7 @@ show_usage_guide() {
     echo -e "${BLUE}【完整代理地址】${PLAIN}"
     echo -e "${GREEN}http://$client_ip:$port${PLAIN}"
     echo ""
-    echo -e "${BLUE}【systemd 服务环境变量配置】${PLAIN}"
+    echo -e "${BLUE}【环境变量配置】${PLAIN}"
     echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$client_ip:$port\"${PLAIN}"
     echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$client_ip:$port\"${PLAIN}"
     echo ""
@@ -110,10 +123,15 @@ show_usage_guide() {
     echo -e "   ${GREEN}git config --global http.proxy http://$client_ip:$port${PLAIN}"
     echo -e "   ${GREEN}git config --global https.proxy http://$client_ip:$port${PLAIN}"
     echo ""
-    echo -e "${YELLOW}11. Docker 使用代理${PLAIN}"
+    echo -e "${YELLOW}11. systemd 服务中使用代理${PLAIN}"
+    echo -e "   编辑服务文件 ${BLUE}/etc/systemd/system/xxx.service${PLAIN}，在 [Service] 段添加:"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$client_ip:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$client_ip:$port\"${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}12. Docker 使用代理${PLAIN}"
     echo -e "   ${GREEN}docker run --env HTTP_PROXY=http://$client_ip:$port --env HTTPS_PROXY=http://$client_ip:$port image_name${PLAIN}"
     echo ""
-    echo -e "${YELLOW}12. 取消代理设置${PLAIN}"
+    echo -e "${YELLOW}13. 取消代理设置${PLAIN}"
     echo -e "    ${GREEN}unset http_proxy https_proxy ftp_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY${PLAIN}"
     echo ""
     echo -e "${BLUE}==================================${PLAIN}"
@@ -198,6 +216,10 @@ configure_proxy() {
 
     echo -e "${GREEN}配置已完成。${PLAIN}"
     sleep 1
+    
+    # 初始化环境变量
+    init_proxy_env
+    
     restart_tinyproxy
     sleep 2
     show_usage_guide
@@ -305,6 +327,7 @@ modify_port() {
         echo -e "${RED}端口不能为空。${PLAIN}"
     else
         sed -i "s/^Port .*/Port $new_port/" $CONF_FILE
+        init_proxy_env
         restart_tinyproxy
         sleep 2
         show_usage_guide
@@ -354,6 +377,7 @@ menu() {
 # 主逻辑
 check_root
 check_sys
+init_proxy_env
 
 if [ "$1" == "install" ]; then
     install_tinyproxy
