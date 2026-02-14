@@ -1,0 +1,361 @@
+#!/bin/bash
+
+################################################################################
+# Tinyproxy 交互式一键管理脚本
+# 支持：安装、配置、启动、停止、查看状态、卸载、设置代理
+# 适用系统：Ubuntu/Debian/CentOS
+################################################################################
+
+set -e
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[✓]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[✗]${NC} $1"
+}
+
+# 检查是否为 root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "此脚本需要 root 权限运行"
+        exit 1
+    fi
+}
+
+# 检测系统类型
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    else
+        log_error "无法检测系统类型"
+        exit 1
+    fi
+}
+
+# 安装 Tinyproxy
+install_tinyproxy() {
+    log_info "开始安装 Tinyproxy..."
+    
+    detect_os
+    
+    case $OS in
+        ubuntu|debian)
+            apt-get update
+            apt-get install -y tinyproxy
+            ;;
+        centos|rhel|fedora)
+            yum install -y tinyproxy
+            ;;
+        *)
+            log_error "不支持的系统类型: $OS"
+            exit 1
+            ;;
+    esac
+    
+    log_success "Tinyproxy 安装成功"
+}
+
+# 配置 Tinyproxy
+configure_tinyproxy() {
+    log_info "开始配置 Tinyproxy..."
+    
+    local config_file="/etc/tinyproxy/tinyproxy.conf"
+    
+    if [ ! -f "$config_file" ]; then
+        log_error "配置文件不存在: $config_file"
+        exit 1
+    fi
+    
+    # 备份原始配置
+    cp "$config_file" "${config_file}.backup"
+    log_info "原始配置已备份到: ${config_file}.backup"
+    
+    # 读取用户输入
+    read -p "请输入代理监听端口 (默认: 8888): " proxy_port
+    proxy_port=${proxy_port:-8888}
+    
+    read -p "请输入监听地址 (默认: 0.0.0.0): " listen_addr
+    listen_addr=${listen_addr:-0.0.0.0}
+    
+    read -p "允许日志记录? (y/n, 默认: y): " enable_log
+    enable_log=${enable_log:-y}
+    
+    # 修改配置文件
+    sed -i "s/^Port .*/Port $proxy_port/" "$config_file"
+    sed -i "s/^#Allow 127.0.0.1/Allow 0.0.0.0/" "$config_file" || true
+    sed -i "s/^Listen .*/Listen $listen_addr/" "$config_file" || sed -i "/^Port/a Listen $listen_addr" "$config_file"
+    
+    # 配置日志
+    if [ "$enable_log" = "y" ]; then
+        sed -i "s/^#LogFile .*/LogFile \/var\/log\/tinyproxy\/tinyproxy.log/" "$config_file"
+    else
+        sed -i "s/^LogFile .*/# LogFile \/var\/log\/tinyproxy\/tinyproxy.log/" "$config_file"
+    fi
+    
+    # 禁用 CONNECT 方法（可选）
+    read -p "禁用 CONNECT 方法? (y/n, 默认: n): " disable_connect
+    if [ "$disable_connect" = "y" ]; then
+        sed -i "s/^#ConnectPort/ConnectPort/" "$config_file" || true
+    fi
+    
+    log_success "Tinyproxy 配置完成"
+    log_info "代理地址: $listen_addr:$proxy_port"
+}
+
+# 启动 Tinyproxy
+start_tinyproxy() {
+    log_info "启动 Tinyproxy..."
+    
+    systemctl start tinyproxy
+    
+    if systemctl is-active --quiet tinyproxy; then
+        log_success "Tinyproxy 已启动"
+        show_status
+    else
+        log_error "Tinyproxy 启动失败"
+        exit 1
+    fi
+}
+
+# 停止 Tinyproxy
+stop_tinyproxy() {
+    log_info "停止 Tinyproxy..."
+    
+    systemctl stop tinyproxy
+    
+    if ! systemctl is-active --quiet tinyproxy; then
+        log_success "Tinyproxy 已停止"
+    else
+        log_error "Tinyproxy 停止失败"
+        exit 1
+    fi
+}
+
+# 重启 Tinyproxy
+restart_tinyproxy() {
+    log_info "重启 Tinyproxy..."
+    systemctl restart tinyproxy
+    
+    if systemctl is-active --quiet tinyproxy; then
+        log_success "Tinyproxy 已重启"
+        show_status
+    else
+        log_error "Tinyproxy 重启失败"
+        exit 1
+    fi
+}
+
+# 显示状态
+show_status() {
+    log_info "Tinyproxy 状态信息"
+    
+    if systemctl is-active --quiet tinyproxy; then
+        echo -e "${GREEN}状态: 运行中${NC}"
+    else
+        echo -e "${RED}状态: 已停止${NC}""
+    fi
+    
+    # 显示监听端口
+    local ports=$(ss -tlnp 2>/dev/null | grep tinyproxy || netstat -tlnp 2>/dev/null | grep tinyproxy || echo "无法获取端口信息")
+    echo -e "${BLUE}监听信息:${NC}"
+    echo "$ports"
+    
+    # 显示配置
+    local config_file="/etc/tinyproxy/tinyproxy.conf"
+    echo -e "${BLUE}配置摘要:${NC}"
+    grep -E "^(Port|Listen|LogFile)" "$config_file" | grep -v "^#" || true
+}
+
+# 查看日志
+view_logs() {
+    local log_file="/var/log/tinyproxy/tinyproxy.log"
+    
+    if [ ! -f "$log_file" ]; then
+        log_warning "日志文件不存在: $log_file"
+        return
+    fi
+    
+    log_info "最近 50 行日志:"
+    tail -50 "$log_file"
+}
+
+# 测试代理
+test_proxy() {
+    log_info "测试代理连接..."
+    
+    local config_file="/etc/tinyproxy/tinyproxy.conf"
+    local port=$(grep "^Port " "$config_file" | awk '{print $2}')
+    local addr=$(grep "^Listen " "$config_file" | awk '{print $2}')
+    
+    addr=${addr:-127.0.0.1}
+    port=${port:-8888}
+    
+    log_info "尝试连接 $addr:$port..."
+    
+    if nc -zv "$addr" "$port" 2>/dev/null; then
+        log_success "代理连接成功"
+        
+        # 测试 HTTP 请求
+        log_info "测试 HTTP 请求..."
+        if curl -x "http://$addr:$port" -s -o /dev/null -w "%{http_code}" http://www.google.com; then
+            log_success "HTTP 请求成功"
+        else
+            log_warning "HTTP 请求可能失败（可能是网络问题）"
+        fi
+    else
+        log_error "无法连接到代理 $addr:$port"
+    fi
+}
+
+# 卸载 Tinyproxy
+uninstall_tinyproxy() {
+    log_warning "确实要卸载 Tinyproxy 吗? (输入 'yes' 确认)"
+    read -p "> " confirm
+    
+    if [ "$confirm" != "yes" ]; then
+        log_info "已取消卸载"
+        return
+    fi
+    
+    log_info "停止 Tinyproxy..."
+    systemctl stop tinyproxy || true
+    
+    log_info "卸载 Tinyproxy..."
+    detect_os
+    
+    case $OS in
+        ubuntu|debian)
+            apt-get remove -y tinyproxy
+            ;;
+        centos|rhel|fedora)
+            yum remove -y tinyproxy
+            ;;
+    esac
+    
+    log_success "Tinyproxy 已卸载"
+}
+
+# 设置客户端代理
+setup_client_proxy() {
+    log_info "客户端代理设置"
+    
+    read -p "请输入服务器地址: " server_addr
+    read -p "请输入代理端口: " server_port
+    
+    cat > /tmp/proxy_setup.sh << EOF
+#!/bin/bash
+# Tinyproxy 客户端配置脚本
+
+# HTTP 代理设置
+export http_proxy="http://$server_addr:$server_port"
+export https_proxy="http://$server_addr:$server_port"
+export HTTP_PROXY="http://$server_addr:$server_port"
+export HTTPS_PROXY="http://$server_addr:$server_port"
+
+echo "代理已设置："
+echo "http_proxy: \$http_proxy"
+echo "https_proxy: \$https_proxy"
+
+# 测试代理
+echo ""
+echo "测试代理连接..."
+curl -x "http://$server_addr:$server_port" -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://www.google.com
+EOF
+    
+    chmod +x /tmp/proxy_setup.sh
+    
+    log_success "客户端配置脚本已生成: /tmp/proxy_setup.sh"
+    log_info "使用方法: source /tmp/proxy_setup.sh"
+}
+
+# 主菜单
+show_menu() {
+    echo ""
+    echo -e "${BLUE}========== Tinyproxy 管理脚本 ==========${NC}"
+    echo "1. 安装 Tinyproxy"
+    echo "2. 配置 Tinyproxy"
+    echo "3. 启动 Tinyproxy"
+    echo "4. 停止 Tinyproxy"
+    echo "5. 重启 Tinyproxy"
+    echo "6. 查看状态"
+    echo "7. 查看日志"
+    echo "8. 测试代理"
+    echo "9. 设置客户端代理"
+    echo "10. 卸载 Tinyproxy"
+    echo "0. 退出"
+    echo -e "${BLUE}======================================${NC}"
+    read -p "请选择操作 (0-10): " choice
+}
+
+# 主程序
+main() {
+    check_root
+    
+    while true; do
+        show_menu
+        
+        case $choice in
+            1)
+                install_tinyproxy
+                ;;
+            2)
+                configure_tinyproxy
+                ;;
+            3)
+                start_tinyproxy
+                ;;
+            4)
+                stop_tinyproxy
+                ;;
+            5)
+                restart_tinyproxy
+                ;;
+            6)
+                show_status
+                ;;
+            7)
+                view_logs
+                ;;
+            8)
+                test_proxy
+                ;;
+            9)
+                setup_client_proxy
+                ;;
+            10)
+                uninstall_tinyproxy
+                ;;
+            0)
+                log_info "退出脚本"
+                exit 0
+                ;;
+            *)
+                log_error "无效的选择"
+                ;;
+        esac
+        
+        read -p "按 Enter 继续..."
+    done
+}
+
+# 运行主程序
+main
