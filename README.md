@@ -19,3 +19,7 @@ wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/xr
 ```bash
 wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Shadowsocks2022 -O ss2022_install.sh && chmod +x ss2022_install.sh && ./ss2022_install.sh
 ```
+### 4. nftables(一键脚本转发）
+```bash
+wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/nftables -O /etc/nftables.conf
+```
