@@ -1,0 +1,328 @@
+#!/bin/bash
+
+# ==================================================
+# Tinyproxy 一键交互式管理脚本 (IPv4 Only)
+# Author: Gemini
+# Description: Install and manage Tinyproxy easily (IPv4 Only)
+# ==================================================
+
+# 颜色定义
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
+PLAIN='\033[0m'
+
+# 配置文件路径
+CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
+SCRIPT_PATH=$(readlink -f "$0")
+RELEASE=""
+
+# 获取外网IPv4地址（只要IPv4，不要IPv6）
+get_public_ipv4() {
+    local public_ip=""
+    
+    # 方法1: 使用 curl -4 获取外网IPv4
+    public_ip=$(curl -s -4 https://api.ipify.org 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法2: 使用 icanhazip
+    public_ip=$(curl -s -4 http://icanhazip.com 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法3: 使用 ident.me
+    public_ip=$(curl -s -4 http://ident.me 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 如果都失败，返回错误提示
+    echo "获取失败"
+}
+
+# 获取本地IPv4地址
+get_local_ipv4() {
+    # 使用 -4 确保只获取IPv4
+    local ipv4=$(hostname -I 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | head -1)
+    if [[ -z "$ipv4" ]]; then
+        ipv4=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v "127.0.0.1" | head -1)
+    fi
+    echo "$ipv4"
+}
+
+# 环境变量初始化（从配置文件读取）
+init_proxy_env() {
+    if [[ -f $CONF_FILE ]]; then
+        PORT=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        CLIENT_IP=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+        
+        if [[ -n "$PORT" ]] && [[ -n "$CLIENT_IP" ]]; then
+            export HTTP_PROXY="http://$CLIENT_IP:$PORT"
+            export HTTPS_PROXY="http://$CLIENT_IP:$PORT"
+        fi
+    fi
+}
+
+# 检查是否为 Root 用户
+check_root() {
+    [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}" && exit 1
+}
+
+# 系统检测
+check_sys() {
+    if [[ -f /etc/redhat-release ]]; then
+        RELEASE="centos"
+    elif [[ -f /etc/debian_version ]]; then
+        RELEASE="debian"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    elif cat /proc/version 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /proc/version 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    else
+        RELEASE="unknown"
+    fi
+    
+    if [[ "${RELEASE}" == "unknown" ]]; then
+        echo -e "${RED}无法识别系统类型！${PLAIN}"
+        exit 1
+    fi
+}
+
+# 禁用IPv6
+disable_ipv6() {
+    echo -e "${BLUE}【正在禁用IPv6...】${PLAIN}"
+    
+    # 在 /etc/sysctl.conf 中禁用IPv6
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1
+    
+    # 添加到配置文件以持久化
+    if ! grep -q "net.ipv6.conf.all.disable_ipv6=1" /etc/sysctl.conf; then
+        echo "net.ipv6.conf.all.disable_ipv6=1" >> /etc/sysctl.conf
+        echo "net.ipv6.conf.default.disable_ipv6=1" >> /etc/sysctl.conf
+        echo "net.ipv6.conf.lo.disable_ipv6=1" >> /etc/sysctl.conf
+    fi
+    
+    sysctl -p >/dev/null 2>&1
+    echo -e "${GREEN}✓ IPv6已禁用${PLAIN}"
+}
+
+# 安装 Tinyproxy
+install_tinyproxy() {
+    echo -e "${BLUE}【开始安装 Tinyproxy...】${PLAIN}"
+    
+    check_sys
+    
+    if [[ "$RELEASE" == "centos" ]]; then
+        yum update -y >/dev/null 2>&1
+        yum install -y tinyproxy curl >/dev/null 2>&1
+    elif [[ "$RELEASE" == "debian" ]] || [[ "$RELEASE" == "ubuntu" ]]; then
+        apt-get update >/dev/null 2>&1
+        apt-get install -y tinyproxy curl >/dev/null 2>&1
+    fi
+    
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}✓ Tinyproxy 安装成功${PLAIN}"
+    else
+        echo -e "${RED}✗ Tinyproxy 安装失败${PLAIN}"
+        exit 1
+    fi
+    
+    # 禁用IPv6
+    disable_ipv6
+}
+
+# 配置 Tinyproxy
+configure_tinyproxy() {
+    local port=$1
+    local client_ip=$2
+    
+    echo -e "${BLUE}【正在配置 Tinyproxy...】${PLAIN}"
+    
+    # 备份原配置文件
+    cp $CONF_FILE ${CONF_FILE}.bak
+    
+    # 修改端口
+    sed -i "s/^Port .*/Port $port/" $CONF_FILE
+    
+    # 清除原有的Allow配置
+    sed -i '/^Allow /d' $CONF_FILE
+    
+    # 添加新的Allow配置（只允许IPv4）
+    echo "Allow $client_ip" >> $CONF_FILE
+    
+    # 禁用IPv6绑定 - 确保只使用IPv4
+    if ! grep -q "^BindAddress" $CONF_FILE; then
+        sed -i '/^# BindAddress/a BindAddress 0.0.0.0' $CONF_FILE
+    else
+        sed -i 's/^BindAddress .*/BindAddress 0.0.0.0/' $CONF_FILE
+    fi
+    
+    # 注释掉任何IPv6相关的配置
+    sed -i '/^[^#]*::/s/^/# /' $CONF_FILE
+    
+    echo -e "${GREEN}✓ Tinyproxy 配置完成${PLAIN}"
+}
+
+# 启动 Tinyproxy
+start_tinyproxy() {
+    echo -e "${BLUE}【正在启动 Tinyproxy...】${PLAIN}"
+    
+    systemctl start tinyproxy
+    systemctl enable tinyproxy
+    
+    if systemctl is-active --quiet tinyproxy; then
+        echo -e "${GREEN}✓ Tinyproxy 已启动${PLAIN}"
+    else
+        echo -e "${RED}✗ Tinyproxy 启动失败${PLAIN}"
+        exit 1
+    fi
+}
+
+# 重启 Tinyproxy
+restart_tinyproxy() {
+    echo -e "${BLUE}【正在重启 Tinyproxy...】${PLAIN}"
+    systemctl restart tinyproxy
+    
+    if systemctl is-active --quiet tinyproxy; then
+        echo -e "${GREEN}✓ Tinyproxy 已重启${PLAIN}"
+    else
+        echo -e "${RED}✗ Tinyproxy 重启失败${PLAIN}"
+    fi
+}
+
+# 停止 Tinyproxy
+stop_tinyproxy() {
+    echo -e "${BLUE}【正在停止 Tinyproxy...】${PLAIN}"
+    systemctl stop tinyproxy
+    
+    if ! systemctl is-active --quiet tinyproxy; then
+        echo -e "${GREEN}✓ Tinyproxy 已停止${PLAIN}"
+    else
+        echo -e "${RED}✗ Tinyproxy 停止失败${PLAIN}"
+    fi
+}
+
+# 查看状态
+status_tinyproxy() {
+    systemctl status tinyproxy
+}
+
+# 显示使用说明
+show_usage_guide() {
+    local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    local client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+    local public_ip=$(get_public_ipv4)
+    
+    clear
+    echo -e "${GREEN}=================================="
+    echo -e " Tinyproxy 配置完成！${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【代理服务器信息】${PLAIN}"
+    echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+    echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+    echo -e "服务器公网IPv4: ${YELLOW}$public_ip${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【代理地址】${PLAIN}"
+    echo -e "http://${YELLOW}$public_ip:$port${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【使用说明】${PLAIN}"
+    echo -e "Linux/Mac: export http_proxy=http://$public_ip:$port"
+    echo -e "Windows: 在代理设置中输入 $public_ip:$port"
+    echo -e "浏览器: 在网络设置中配置HTTP代理为 $public_ip:$port"
+    echo ""
+    echo -e "${BLUE}【重要提示】${PLAIN}"
+    echo -e "${YELLOW}✓ 仅支持 IPv4${PLAIN}"
+    echo -e "${YELLOW}✓ IPv6 已被禁用${PLAIN}"
+    echo ""
+}
+
+# 主菜单
+show_menu() {
+    clear
+    echo -e "${GREEN}=================================="
+    echo -e " Tinyproxy 管理脚本 (IPv4 Only)${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo ""
+    echo -e "${BLUE}请选择操作:${PLAIN}"
+    echo "1) 安装 Tinyproxy"
+    echo "2) 配置 Tinyproxy"
+    echo "3) 启动 Tinyproxy"
+    echo "4) 重启 Tinyproxy"
+    echo "5) 停止 Tinyproxy"
+    echo "6) 查看状态"
+    echo "7) 显示配置信息"
+    echo "0) 退出"
+    echo ""
+    echo -e "${BLUE}请输入选择 [0-7]:${PLAIN}"
+}
+
+# 主程序
+main() {
+    check_root
+    
+    while true; do
+        show_menu
+        read -p "" choice
+        
+        case $choice in
+            1)
+                install_tinyproxy
+                read -p "按 Enter 继续..."
+                ;;
+            2)
+                read -p "请输入端口 [默认8888]: " port
+                port=${port:-8888}
+                read -p "请输入允许的客户端IP [默认0.0.0.0]: " client_ip
+                client_ip=${client_ip:-0.0.0.0}
+                configure_tinyproxy $port $client_ip
+                read -p "按 Enter 继续..."
+                ;;
+            3)
+                start_tinyproxy
+                read -p "按 Enter 继续..."
+                ;;
+            4)
+                restart_tinyproxy
+                read -p "按 Enter 继续..."
+                ;;
+            5)
+                stop_tinyproxy
+                read -p "按 Enter 继续..."
+                ;;
+            6)
+                status_tinyproxy
+                read -p "按 Enter 继续..."
+                ;;
+            7)
+                show_usage_guide
+                read -p "按 Enter 继续..."
+                ;;
+            0)
+                echo -e "${GREEN}感谢使用，再见！${PLAIN}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效的选择！${PLAIN}"
+                read -p "按 Enter 继续..."
+                ;;
+        esac
+    done
+}
+
+# 初始化并运行
+init_proxy_env
+main
