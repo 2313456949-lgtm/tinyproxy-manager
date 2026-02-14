@@ -5,7 +5,8 @@
 ### 1. Tinyproxy (基础 HTTP)
 > 点击下方代码框即可快速选中复制
 ```bash
-wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Tinyproxy -O tinyproxy_install.sh && chmod +x tinyproxy_install.sh && ./tinyproxy_install.sh
+wget wget -O Tinyproxy https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Tinyproxy && chmod +x Tinyproxy && ./Tinyproxy
+main/Tinyproxy -O tinyproxy_install.sh && chmod +x tinyproxy_install.sh && ./tinyproxy_install.sh
 ```
 ---
 
