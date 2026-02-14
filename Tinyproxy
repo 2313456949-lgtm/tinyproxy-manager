@@ -18,29 +18,54 @@ CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
 SCRIPT_PATH=$(readlink -f "$0")
 RELEASE=""
 
-# 获取本机IPv4地址（不要外网IP，只要本机IPv4）
-get_local_ipv4() {
-    local ipv4_addr=""
+# 获取外网IPv4地址（只要IPv4，不要IPv6和内网IP）
+get_public_ipv4() {
+    local public_ip=""
     
-    # 方法1: 使用 hostname -I 获取所有IP，过滤IPv4
-    ipv4_addr=$(hostname -I | grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -1)
-    
-    if [[ -z "$ipv4_addr" ]]; then
-        # 方法2: 使用 ip addr 获取IPv4地址
-        ipv4_addr=$(ip addr | grep -oE 'inet ([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '127.0.0.1' | head -1)
+    # 方法1: 使用 curl -4 获取外网IPv4
+    public_ip=$(curl -s -4 https://api.ipify.org 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
     fi
     
-    if [[ -z "$ipv4_addr" ]]; then
-        # 方法3: 使用 ifconfig 获取IPv4地址
-        ipv4_addr=$(ifconfig 2>/dev/null | grep -oE 'inet ([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '127.0.0.1' | head -1)
+    # 方法2: 使用 icanhazip
+    public_ip=$(curl -s -4 http://icanhazip.com 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
     fi
     
-    # 确保返回的是IPv4格式（排除IPv6）
-    if [[ $ipv4_addr =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        echo "$ipv4_addr"
-    else
-        echo "127.0.0.1"
+    # 方法3: 使用 ident.me
+    public_ip=$(curl -s -4 http://ident.me 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
     fi
+    
+    # 方法4: 使用 whatismyipaddress
+    public_ip=$(curl -s -4 http://whatismyipaddress.com/api/ipify.php 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法5: 使用 checkip.amazonaws
+    public_ip=$(curl -s -4 https://checkip.amazonaws.com 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法6: 使用 ifconfig.me
+    public_ip=$(curl -s -4 http://ifconfig.me 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 如果都失败，返回错误提示
+    echo "获取失败"
 }
 
 # 环境变量初始化（从配置文件读取）
@@ -89,7 +114,15 @@ check_sys() {
 show_usage_guide() {
     local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
     local client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
-    local server_ipv4=$(get_local_ipv4)
+    
+    echo -e "${YELLOW}正在获取外网IPv4地址...${PLAIN}"
+    local public_ipv4=$(get_public_ipv4)
+    
+    if [[ "$public_ipv4" == "获取失败" ]]; then
+        echo -e "${RED}无法获取外网IP，请检查网络连接！${PLAIN}"
+        sleep 3
+        return
+    fi
     
     clear
     echo -e "${GREEN}=================================="
@@ -97,80 +130,80 @@ show_usage_guide() {
     echo -e "${GREEN}==================================${PLAIN}"
     echo ""
     echo -e "${BLUE}【服务器信息】${PLAIN}"
-    echo -e "本机IPv4地址: ${YELLOW}$server_ipv4${PLAIN}"
+    echo -e "外网IPv4地址: ${YELLOW}$public_ipv4${PLAIN}"
     echo -e "监听端口: ${YELLOW}$port${PLAIN}"
     echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
     echo ""
     echo -e "${BLUE}【完整代理地址】${PLAIN}"
-    echo -e "${GREEN}http://$server_ipv4:$port${PLAIN}"
+    echo -e "${GREEN}http://$public_ipv4:$port${PLAIN}"
     echo ""
     echo -e "${BLUE}【环境变量配置】${PLAIN}"
-    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ipv4:$port\"${PLAIN}"
-    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$public_ipv4:$port\"${PLAIN}"
     echo ""
     echo -e "${BLUE}【Linux 使用命令】${PLAIN}"
     echo ""
     echo -e "${YELLOW}1. 临时设置代理 (仅当前终端有效)${PLAIN}"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ipv4:$port${PLAIN}"
-    echo -e "   ${GREEN}export https_proxy=http://$server_ipv4:$port${PLAIN}"
-    echo -e "   ${GREEN}export ftp_proxy=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export ftp_proxy=http://$public_ipv4:$port${PLAIN}"
     echo ""
     echo -e "${YELLOW}2. 一行命令临时设置代理${PLAIN}"
-    echo -e "   ${GREEN}export HTTP_PROXY=http://$server_ipv4:$port HTTPS_PROXY=http://$server_ipv4:$port FTP_PROXY=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export HTTP_PROXY=http://$public_ipv4:$port HTTPS_PROXY=http://$public_ipv4:$port FTP_PROXY=http://$public_ipv4:$port${PLAIN}"
     echo ""
     echo -e "${YELLOW}3. 【在另一台机器上】测试代理连接 (本地测试)${PLAIN}"
-    echo -e "   ${GREEN}curl -x http://$server_ipv4:$port http://httpbin.org/ip${PLAIN}"
+    echo -e "   ${GREEN}curl -x http://$public_ipv4:$port http://httpbin.org/ip${PLAIN}"
     echo -e "   说明: 如果返回你的真实IP，说明代理正常"
     echo ""
     echo -e "${YELLOW}4. 【在另一台机器上】测试代理连接 (检查端口开放)${PLAIN}"
-    echo -e "   ${GREEN}nc -zv $server_ipv4 $port${PLAIN}"
+    echo -e "   ${GREEN}nc -zv $public_ipv4 $port${PLAIN}"
     echo -e "   或"
-    echo -e "   ${GREEN}telnet $server_ipv4 $port${PLAIN}"
+    echo -e "   ${GREEN}telnet $public_ipv4 $port${PLAIN}"
     echo -e "   说明: 连接成功说明端口正常开放"
     echo ""
     echo -e "${YELLOW}5. 【在另一台机器上】测试代理连接 (使用wget)${PLAIN}"
-    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=http://$server_ipv4:$port https://www.google.com -O /tmp/test.html${PLAIN}"
+    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=http://$public_ipv4:$port https://www.google.com -O /tmp/test.html${PLAIN}"
     echo ""
     echo -e "${YELLOW}6. 【在另一台机器上】临时设置后测试${PLAIN}"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
     echo -e "   ${GREEN}curl http://httpbin.org/ip${PLAIN}"
     echo ""
     echo -e "${YELLOW}7. 永久设置代理 (所有用户)${PLAIN}"
     echo -e "   在 ${BLUE}/etc/profile${PLAIN} 文件末尾添加:"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ipv4:$port${PLAIN}"
-    echo -e "   ${GREEN}export https_proxy=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$public_ipv4:$port${PLAIN}"
     echo -e "   然后运行: ${GREEN}source /etc/profile${PLAIN}"
     echo ""
     echo -e "${YELLOW}8. 仅为当前用户永久设置${PLAIN}"
     echo -e "   在 ${BLUE}~/.bashrc${PLAIN} 或 ${BLUE}~/.bash_profile${PLAIN} 末尾添加:"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ipv4:$port${PLAIN}"
-    echo -e "   ${GREEN}export https_proxy=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$public_ipv4:$port${PLAIN}"
     echo -e "   然后运行: ${GREEN}source ~/.bashrc${PLAIN}"
     echo ""
     echo -e "${YELLOW}9. wget 使用代理${PLAIN}"
-    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=$server_ipv4:$port https://example.com${PLAIN}"
+    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=$public_ipv4:$port https://example.com${PLAIN}"
     echo ""
     echo -e "${YELLOW}10. apt-get 使用代理${PLAIN}"
-    echo -e "   ${GREEN}apt-get -o Acquire::http::Proxy=http://$server_ipv4:$port update${PLAIN}"
+    echo -e "   ${GREEN}apt-get -o Acquire::http::Proxy=http://$public_ipv4:$port update${PLAIN}"
     echo ""
     echo -e "${YELLOW}11. yum 使用代理${PLAIN}"
     echo -e "   编辑 ${BLUE}/etc/yum.conf${PLAIN}，添加:"
-    echo -e "   ${GREEN}proxy=http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}proxy=http://$public_ipv4:$port${PLAIN}"
     echo ""
     echo -e "${YELLOW}12. pip 使用代理${PLAIN}"
-    echo -e "   ${GREEN}pip install -i https://pypi.org/simple -p http://$server_ipv4:$port package_name${PLAIN}"
+    echo -e "   ${GREEN}pip install -i https://pypi.org/simple -p http://$public_ipv4:$port package_name${PLAIN}"
     echo ""
     echo -e "${YELLOW}13. Git 使用代理${PLAIN}"
-    echo -e "   ${GREEN}git config --global http.proxy http://$server_ipv4:$port${PLAIN}"
-    echo -e "   ${GREEN}git config --global https.proxy http://$server_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}git config --global http.proxy http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}git config --global https.proxy http://$public_ipv4:$port${PLAIN}"
     echo ""
     echo -e "${YELLOW}14. systemd 服务中使用代理${PLAIN}"
     echo -e "   编辑服务文件 ${BLUE}/etc/systemd/system/xxx.service${PLAIN}，在 [Service] 段添加:"
-    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ipv4:$port\"${PLAIN}"
-    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$public_ipv4:$port\"${PLAIN}"
     echo ""
     echo -e "${YELLOW}15. Docker 使用代理${PLAIN}"
-    echo -e "   ${GREEN}docker run --env HTTP_PROXY=http://$server_ipv4:$port --env HTTPS_PROXY=http://$server_ipv4:$port image_name${PLAIN}"
+    echo -e "   ${GREEN}docker run --env HTTP_PROXY=http://$public_ipv4:$port --env HTTPS_PROXY=http://$public_ipv4:$port image_name${PLAIN}"
     echo ""
     echo -e "${YELLOW}16. 取消代理设置${PLAIN}"
     echo -e "    ${GREEN}unset http_proxy https_proxy ftp_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY${PLAIN}"
@@ -322,13 +355,22 @@ show_status() {
     if systemctl is-active --quiet tinyproxy; then
         port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
         client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
-        server_ipv4=$(get_local_ipv4)
         
-        echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
-        echo -e "本机IPv4地址: ${YELLOW}$server_ipv4${PLAIN}"
-        echo -e "监听端口: ${YELLOW}$port${PLAIN}"
-        echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
-        echo -e "完整代理地址: ${GREEN}http://$server_ipv4:$port${PLAIN}"
+        echo -e "${YELLOW}正在获取外网IPv4地址...${PLAIN}"
+        local public_ipv4=$(get_public_ipv4)
+        
+        if [[ "$public_ipv4" != "获取失败" ]]; then
+            echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
+            echo -e "外网IPv4地址: ${YELLOW}$public_ipv4${PLAIN}"
+            echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+            echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+            echo -e "完整代理地址: ${GREEN}http://$public_ipv4:$port${PLAIN}"
+        else
+            echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
+            echo -e "${RED}外网IPv4地址: 获取失败（请检查网络）${PLAIN}"
+            echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+            echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+        fi
     else
         echo -e "${RED}Tinyproxy 状态: [未运行]${PLAIN}"
     fi
