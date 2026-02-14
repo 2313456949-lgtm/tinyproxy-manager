@@ -4,6 +4,7 @@
 # Tinyproxy 交互式一键管理脚本
 # 支持：安装、配置、启动、停止、查看状态、卸载、设置代理
 # 适用系统：Ubuntu/Debian/CentOS
+# 注意：仅支持 IPv4
 ################################################################################
 
 set -e
@@ -51,6 +52,26 @@ detect_os() {
     fi
 }
 
+# 验证 IPv4 地址
+validate_ipv4() {
+    local ip=$1
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 验证端口号
+validate_port() {
+    local port=$1
+    if [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 安装 Tinyproxy
 install_tinyproxy() {
     log_info "开始安装 Tinyproxy..."
@@ -89,12 +110,27 @@ configure_tinyproxy() {
     cp "$config_file" "${config_file}.backup"
     log_info "原始配置已备份到: ${config_file}.backup"
     
-    # 读取用户输入
-    read -p "请输入代理监听端口 (默认: 8888): " proxy_port
-    proxy_port=${proxy_port:-8888}
+    # 读取端口
+    while true; do
+        read -p "请输入代理监听端口 (默认: 8888): " proxy_port
+        proxy_port=${proxy_port:-8888}
+        if validate_port "$proxy_port"; then
+            break
+        else
+            log_error "端口号无效，请输入 1-65535 之间的数字"
+        fi
+    done
     
-    read -p "请输入监听地址 (默认: 0.0.0.0): " listen_addr
-    listen_addr=${listen_addr:-0.0.0.0}
+    # 读取监听地址（仅 IPv4）
+    while true; do
+        read -p "请输入监听地址 (仅 IPv4，默认: 0.0.0.0): " listen_addr
+        listen_addr=${listen_addr:-0.0.0.0}
+        if validate_ipv4 "$listen_addr" || [ "$listen_addr" = "0.0.0.0" ]; then
+            break
+        else
+            log_error "地址无效，请输入有效的 IPv4 地址"
+        fi
+    done
     
     read -p "允许日志记录? (y/n, 默认: y): " enable_log
     enable_log=${enable_log:-y}
@@ -102,7 +138,17 @@ configure_tinyproxy() {
     # 修改配置文件
     sed -i "s/^Port .*/Port $proxy_port/" "$config_file"
     sed -i "s/^#Allow 127.0.0.1/Allow 0.0.0.0/" "$config_file" || true
-    sed -i "s/^Listen .*/Listen $listen_addr/" "$config_file" || sed -i "/^Port/a Listen $listen_addr" "$config_file"
+    
+    # 设置监听地址
+    if grep -q "^Listen " "$config_file"; then
+        sed -i "s/^Listen .*/Listen $listen_addr/" "$config_file"
+    else
+        sed -i "/^Port/a Listen $listen_addr" "$config_file"
+    fi
+    
+    # 禁用 IPv6（确保仅 IPv4）
+    sed -i "s/^#DisableViaHeader .*/DisableViaHeader yes/" "$config_file" || \
+    sed -i "/^Listen/a DisableViaHeader yes" "$config_file"
     
     # 配置日志
     if [ "$enable_log" = "y" ]; then
@@ -111,14 +157,8 @@ configure_tinyproxy() {
         sed -i "s/^LogFile .*/# LogFile \/var\/log\/tinyproxy\/tinyproxy.log/" "$config_file"
     fi
     
-    # 禁用 CONNECT 方法（可选）
-    read -p "禁用 CONNECT 方法? (y/n, 默认: n): " disable_connect
-    if [ "$disable_connect" = "y" ]; then
-        sed -i "s/^#ConnectPort/ConnectPort/" "$config_file" || true
-    fi
-    
     log_success "Tinyproxy 配置完成"
-    log_info "代理地址: $listen_addr:$proxy_port"
+    log_info "代理地址: $listen_addr:$proxy_port (IPv4)"
 }
 
 # 启动 Tinyproxy
@@ -171,18 +211,18 @@ show_status() {
     if systemctl is-active --quiet tinyproxy; then
         echo -e "${GREEN}状态: 运行中${NC}"
     else
-        echo -e "${RED}状态: 已停止${NC}""
+        echo -e "${RED}状态: 已停止${NC}"
     fi
     
-    # 显示监听端口
-    local ports=$(ss -tlnp 2>/dev/null | grep tinyproxy || netstat -tlnp 2>/dev/null | grep tinyproxy || echo "无法获取端口信息")
-    echo -e "${BLUE}监听信息:${NC}"
+    # 显示 IPv4 监听端口
+    local ports=$(ss -tlnp4 2>/dev/null | grep tinyproxy || netstat -tlnp4 2>/dev/null | grep tinyproxy || echo "无法获取端口信息")
+    echo -e "${BLUE}监听信息 (IPv4):${NC}"
     echo "$ports"
     
     # 显示配置
     local config_file="/etc/tinyproxy/tinyproxy.conf"
     echo -e "${BLUE}配置摘要:${NC}"
-    grep -E "^(Port|Listen|LogFile)" "$config_file" | grep -v "^#" || true
+    grep -E "^(Port|Listen)" "$config_file" | grep -v "^#" || true
 }
 
 # 查看日志
@@ -198,9 +238,9 @@ view_logs() {
     tail -50 "$log_file"
 }
 
-# 测试代理
+# 测试代理（仅 IPv4）
 test_proxy() {
-    log_info "测试代理连接..."
+    log_info "测试代理连接 (IPv4)..."
     
     local config_file="/etc/tinyproxy/tinyproxy.conf"
     local port=$(grep "^Port " "$config_file" | awk '{print $2}')
@@ -216,7 +256,7 @@ test_proxy() {
         
         # 测试 HTTP 请求
         log_info "测试 HTTP 请求..."
-        if curl -x "http://$addr:$port" -s -o /dev/null -w "%{http_code}" http://www.google.com; then
+        if curl -4 -x "http://$addr:$port" -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://www.google.com; then
             log_success "HTTP 请求成功"
         else
             log_warning "HTTP 请求可能失败（可能是网络问题）"
@@ -254,16 +294,33 @@ uninstall_tinyproxy() {
     log_success "Tinyproxy 已卸载"
 }
 
-# 设置客户端代理
+# 设置客户端代理（仅 IPv4）
 setup_client_proxy() {
-    log_info "客户端代理设置"
+    log_info "客户端代理设置 (IPv4)"
     
-    read -p "请输入服务器地址: " server_addr
-    read -p "请输入代理端口: " server_port
+    local server_addr
+    while true; do
+        read -p "请输入服务器 IPv4 地址: " server_addr
+        if validate_ipv4 "$server_addr"; then
+            break
+        else
+            log_error "请输入有效的 IPv4 地址"
+        fi
+    done
+    
+    local server_port
+    while true; do
+        read -p "请输入代理端口: " server_port
+        if validate_port "$server_port"; then
+            break
+        else
+            log_error "端口号无效，请输入 1-65535 之间的数字"
+        fi
+    done
     
     cat > /tmp/proxy_setup.sh << EOF
 #!/bin/bash
-# Tinyproxy 客户端配置脚本
+# Tinyproxy IPv4 客户端配置脚本
 
 # HTTP 代理设置
 export http_proxy="http://$server_addr:$server_port"
@@ -271,14 +328,14 @@ export https_proxy="http://$server_addr:$server_port"
 export HTTP_PROXY="http://$server_addr:$server_port"
 export HTTPS_PROXY="http://$server_addr:$server_port"
 
-echo "代理已设置："
+echo "IPv4 代理已设置："
 echo "http_proxy: \$http_proxy"
 echo "https_proxy: \$https_proxy"
 
-# 测试代理
+# 测试代理（仅 IPv4）
 echo ""
 echo "测试代理连接..."
-curl -x "http://$server_addr:$server_port" -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://www.google.com
+curl -4 -x "http://$server_addr:$server_port" -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://www.google.com
 EOF
     
     chmod +x /tmp/proxy_setup.sh
@@ -290,7 +347,7 @@ EOF
 # 主菜单
 show_menu() {
     echo ""
-    echo -e "${BLUE}========== Tinyproxy 管理脚本 ==========${NC}"
+    echo -e "${BLUE}========== Tinyproxy 管理脚本 (IPv4) ==========${NC}"
     echo "1. 安装 Tinyproxy"
     echo "2. 配置 Tinyproxy"
     echo "3. 启动 Tinyproxy"
@@ -302,7 +359,7 @@ show_menu() {
     echo "9. 设置客户端代理"
     echo "10. 卸载 Tinyproxy"
     echo "0. 退出"
-    echo -e "${BLUE}======================================${NC}"
+    echo -e "${BLUE}================================================${NC}"
     read -p "请选择操作 (0-10): " choice
 }
 
