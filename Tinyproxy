@@ -1,25 +1,431 @@
 #!/bin/bash
 
-# Script to display external IPv4 address and provide network access setup for Tinyproxy
+# ==================================================
+# Tinyproxy 一键交互式管理脚本
+# Author: Gemini
+# Description: Install and manage Tinyproxy easily
+# ==================================================
 
-# Detect external IPv4 address
-EXTERNAL_IP=$(curl -4 -s https://api.ipify.org)
+# 颜色定义
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
+PLAIN='\033[0m'
 
-# Display external IP address
-echo "External IPv4 Address: $EXTERNAL_IP"
+# 配置文件路径
+CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
+SCRIPT_PATH=$(readlink -f "$0")
+RELEASE=""
 
-# Display usage commands for clients
-echo "Usage Commands for Clients:"
-echo "1. To configure your client:"
-echo "   Set your proxy server to $EXTERNAL_IP on port [PORT]"
-echo "2. To check your connection:"
-echo "   curl -x http://$EXTERNAL_IP:[PORT] http://example.com"
+# 获取外网IPv4地址（只要IPv4，不要IPv6）
+get_public_ipv4() {
+    local public_ip=""
+    
+    # 方法1: 使用 curl -4 获取外网IPv4
+    public_ip=$(curl -s -4 https://api.ipify.org 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法2: 使用 icanhazip
+    public_ip=$(curl -s -4 http://icanhazip.com 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 方法3: 使用 ident.me
+    public_ip=$(curl -s -4 http://ident.me 2>/dev/null)
+    if [[ -n "$public_ip" ]] && [[ $public_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$public_ip"
+        return
+    fi
+    
+    # 如果都失败，返回错误提示
+    echo "获取失败"
+}
 
-# Setup instructions for client network access
-echo "Client Network Access Setup:"
-echo "1. Ensure your firewall allows traffic on port [PORT]."
-echo "2. Use the following command to allow access from a specific client IP:"
-echo "   iptables -A INPUT -p tcp --dport [PORT] -s <client-ip> -j ACCEPT"
-echo "3. Replace <client-ip> with the actual IP address of the client."
+# 环境变量初始化（从配置文件读取）
+init_proxy_env() {
+    if [[ -f $CONF_FILE ]]; then
+        PORT=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        CLIENT_IP=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+        
+        if [[ -n "$PORT" ]] && [[ -n "$CLIENT_IP" ]]; then
+            export HTTP_PROXY="http://$CLIENT_IP:$PORT"
+            export HTTPS_PROXY="http://$CLIENT_IP:$PORT"
+        fi
+    fi
+}
 
-# Note: Ensure to replace [PORT] with the actual port number you are using for Tinyproxy
+# 检查是否为 Root 用户
+check_root() {
+    [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}" && exit 1
+}
+
+# 系统检测
+check_sys() {
+    if [[ -f /etc/redhat-release ]]; then
+        RELEASE="centos"
+    elif [[ -f /etc/debian_version ]]; then
+        RELEASE="debian"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    elif cat /proc/version 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /proc/version 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    else
+        RELEASE="unknown"
+    fi
+    
+    if [[ "${RELEASE}" == "unknown" ]]; then
+        echo -e "${RED}无法识别系统类型！${PLAIN}"
+        exit 1
+    fi
+}
+
+# 显示使用说明
+show_usage_guide() {
+    local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    local client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+    
+    echo -e "${YELLOW}正在获取外网IPv4地址...${PLAIN}"
+    local public_ipv4=$(get_public_ipv4)
+    
+    if [[ "$public_ipv4" == "获取失败" ]]; then
+        echo -e "${RED}无法获取外网IP，请检查网络连接！${PLAIN}"
+        sleep 3
+        return
+    fi
+    
+    clear
+    echo -e "${GREEN}=================================="
+    echo -e " Tinyproxy 配置完成！${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【服务器信息】${PLAIN}"
+    echo -e "外网IPv4地址: ${YELLOW}$public_ipv4${PLAIN}"
+    echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+    echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【完整代理地址】${PLAIN}"
+    echo -e "${GREEN}http://$public_ipv4:$port${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【环境变量配置】${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【给另一台服务器完整网络访问权限】${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式1】临时设置代理 (仅当前终端)${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export ftp_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式2】永久设置代理 (系统级)${PLAIN}"
+    echo -e "   编辑 ${BLUE}/etc/profile${PLAIN}，添加:"
+    echo -e "   ${GREEN}export http_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$public_ipv4:$port${PLAIN}"
+    echo -e "   运行: ${GREEN}source /etc/profile${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式3】apt-get 使用代理${PLAIN}"
+    echo -e "   创建 ${BLUE}/etc/apt/apt.conf.d/proxy.conf${PLAIN}:"
+    echo -e "   ${GREEN}Acquire::http::Proxy \"http://$public_ipv4:$port\";${PLAIN}"
+    echo -e "   ${GREEN}Acquire::https::Proxy \"http://$public_ipv4:$port\";${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式4】yum 使用代理${PLAIN}"
+    echo -e "   编辑 ${BLUE}/etc/yum.conf${PLAIN}，添加:"
+    echo -e "   ${GREEN}proxy=http://$public_ipv4:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式5】pip 使用代理${PLAIN}"
+    echo -e "   创建 ${BLUE}~/.pip/pip.conf${PLAIN}:"
+    echo -e "   ${GREEN}[global]${PLAIN}"
+    echo -e "   ${GREEN}proxy = http://$public_ipv4:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式6】Git 使用代理${PLAIN}"
+    echo -e "   ${GREEN}git config --global http.proxy http://$public_ipv4:$port${PLAIN}"
+    echo -e "   ${GREEN}git config --global https.proxy http://$public_ipv4:$port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式7】Docker 使用代理${PLAIN}"
+    echo -e "   创建 ${BLUE}~/.docker/config.json${PLAIN}:"
+    echo -e "   ${GREEN}{ \"proxies\": { \"default\": { \"httpProxy\": \"http://$public_ipv4:$port\" }}}${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式8】测试代理连接${PLAIN}"
+    echo -e "   ${GREEN}curl -x http://$public_ipv4:$port http://httpbin.org/ip${PLAIN}"
+    echo -e "   ${GREEN}telnet $public_ipv4 $port${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式9】wget 使用代理下载${PLAIN}"
+    echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=http://$public_ipv4:$port https://example.com${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}【方式10】systemd 服务使用代理${PLAIN}"
+    echo -e "   编辑服务文件，在 [Service] 段添加:"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$public_ipv4:$port\"${PLAIN}"
+    echo ""
+    echo -e "${BLUE}==================================${PLAIN}"
+    read -p "按 Enter 键返回主菜单..."
+}
+
+# 安装 Tinyproxy
+install_tinyproxy() {
+    echo -e "${GREEN}正在安装 Tinyproxy...${PLAIN}"
+    
+    if [[ "${RELEASE}" == "centos" ]]; then
+        yum install -y epel-release
+        yum install -y tinyproxy
+    else
+        apt-get update
+        apt-get install -y tinyproxy
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Tinyproxy 安装成功！${PLAIN}"
+        
+        # 创建快捷命令
+        cp "$SCRIPT_PATH" /usr/local/bin/tpmenu 2>/dev/null
+        chmod +x /usr/local/bin/tpmenu 2>/dev/null
+        echo -e "${YELLOW}提示: 以后可以直接输入 'tpmenu' 命令来管理。${PLAIN}"
+        
+        # 初始化配置，备份原配置（加入时间戳避免覆盖）
+        if [[ -f $CONF_FILE ]]; then
+            cp $CONF_FILE ${CONF_FILE}.bak.$(date +%s)
+        fi
+        
+        # 默认配置优化
+        sed -i 's/^Allow /#Allow /g' $CONF_FILE
+        
+        # 启用服务并启动
+        systemctl enable tinyproxy 2>/dev/null
+        systemctl start tinyproxy 2>/dev/null
+        
+        sleep 2
+        configure_proxy
+    else
+        echo -e "${RED}安装失败，请检查网络或源。${PLAIN}"
+        sleep 3
+        exit 1
+    fi
+}
+
+# 配置向导
+configure_proxy() {
+    echo -e "${YELLOW}--- 配置向导 ---${PLAIN}"
+    
+    # 设置端口
+    read -p "请输入代理监听端口 (默认 8888): " port
+    [[ -z "${port}" ]] && port="8888"
+    sed -i "s/^Port .*/Port $port/" $CONF_FILE
+    
+    # 设置允许的客户端IP
+    echo -e ""
+    echo -e "${YELLOW}请输入允许连接的客户端 IP 地址${PLAIN}"
+    read -p "请输入客户端 IP (例如: 192.168.1.100): " client_ip
+    
+    # 先清除已有的 Allow 规则（除注释外的）
+    sed -i '/^Allow /d' $CONF_FILE
+
+    if [[ -z "${client_ip}" ]]; then
+        echo -e "${RED}错误: IP 不能为空！${PLAIN}"
+        echo -e "${YELLOW}重新设置...${PLAIN}"
+        sleep 1
+        configure_proxy
+    else
+        # 验证IP格式
+        if [[ $client_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "Allow $client_ip" >> $CONF_FILE
+            echo -e "${GREEN}已设置允许的客户端IP: $client_ip${PLAIN}"
+        else
+            echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
+            echo -e "${YELLOW}重新设置...${PLAIN}"
+            sleep 1
+            configure_proxy
+        fi
+    fi
+
+    echo -e "${GREEN}配置已完成。${PLAIN}"
+    sleep 1
+    
+    # 初始化环境变量
+    init_proxy_env
+    
+    restart_tinyproxy
+    sleep 2
+    show_usage_guide
+}
+
+# 卸载
+uninstall_tinyproxy() {
+    echo -e "${YELLOW}正在卸载 Tinyproxy...${PLAIN}"
+    systemctl stop tinyproxy 2>/dev/null
+    systemctl disable tinyproxy 2>/dev/null
+    
+    if [[ "${RELEASE}" == "centos" ]]; then
+        yum remove -y tinyproxy
+    else
+        apt-get remove -y tinyproxy --purge
+    fi
+    
+    rm -rf /etc/tinyproxy
+    rm -f /usr/local/bin/tpmenu
+    echo -e "${GREEN}卸载完成。${PLAIN}"
+    sleep 2
+}
+
+# 管理命令
+start_tinyproxy() {
+    systemctl start tinyproxy
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}服务已启动。${PLAIN}"
+    else
+        echo -e "${RED}服务启动失败。${PLAIN}"
+    fi
+    sleep 2
+}
+
+stop_tinyproxy() {
+    systemctl stop tinyproxy
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}服务已停止。${PLAIN}"
+    else
+        echo -e "${RED}服务停止失败。${PLAIN}"
+    fi
+    sleep 2
+}
+
+restart_tinyproxy() {
+    systemctl restart tinyproxy
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}服务已重启。${PLAIN}"
+    else
+        echo -e "${RED}服务重启失败。${PLAIN}"
+        sleep 2
+        return
+    fi
+    sleep 1
+    show_status
+}
+
+show_status() {
+    if systemctl is-active --quiet tinyproxy; then
+        port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+        
+        echo -e "${YELLOW}正在获取外网IPv4地址...${PLAIN}"
+        local public_ipv4=$(get_public_ipv4)
+        
+        if [[ "$public_ipv4" != "获取失败" ]]; then
+            echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
+            echo -e "外网IPv4地址: ${YELLOW}$public_ipv4${PLAIN}"
+            echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+            echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+            echo -e "完整代理地址: ${GREEN}http://$public_ipv4:$port${PLAIN}"
+        else
+            echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
+            echo -e "${RED}外网IPv4地址: 获取失败（请检查网络）${PLAIN}"
+            echo -e "监听端口: ${YELLOW}$port${PLAIN}"
+            echo -e "允许客户端IP: ${YELLOW}$client_ip${PLAIN}"
+        fi
+    else
+        echo -e "${RED}Tinyproxy 状态: [未运行]${PLAIN}"
+    fi
+    sleep 2
+}
+
+view_logs() {
+    if [[ -f /var/log/tinyproxy/tinyproxy.log ]]; then
+        tail -n 20 /var/log/tinyproxy/tinyproxy.log
+    else
+        echo -e "${RED}日志文件不存在，服务可能未启动过。${PLAIN}"
+    fi
+    sleep 3
+}
+
+add_ip() {
+    read -p "请输入要添加的客户端白名单 IP: " new_ip
+    if [[ -z "${new_ip}" ]]; then
+        echo -e "${RED}IP 不能为空。${PLAIN}"
+    else
+        # 验证IP格式
+        if [[ $new_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            # 检查是否已存在
+            if grep -q "^Allow $new_ip" $CONF_FILE; then
+                echo -e "${YELLOW}此 IP 已存在。${PLAIN}"
+            else
+                echo "Allow $new_ip" >> $CONF_FILE
+                echo -e "${GREEN}已添加 $new_ip${PLAIN}"
+                restart_tinyproxy
+            fi
+        else
+            echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
+        fi
+    fi
+}
+
+modify_port() {
+    read -p "请输入新端口: " new_port
+    if [[ -z "${new_port}" ]]; then
+        echo -e "${RED}端口不能为空。${PLAIN}"
+    else
+        sed -i "s/^Port .*/Port $new_port/" $CONF_FILE
+        init_proxy_env
+        restart_tinyproxy
+        sleep 2
+        show_usage_guide
+    fi
+}
+
+# 菜单
+menu() {
+    clear
+    echo -e "=================================="
+    echo -e " ${GREEN}Tinyproxy 一键管理脚本${PLAIN}"
+    echo -e "=================================="
+    echo -e "1. 安装 Tinyproxy"
+    echo -e "2. 卸载 Tinyproxy"
+    echo -e "----------------------------------"
+    echo -e "3. 启动服务"
+    echo -e "4. 停止服务"
+    echo -e "5. 重启服务"
+    echo -e "6. 查看状态 & 端口 & 客户端IP"
+    echo -e "----------------------------------"
+    echo -e "7. 添加允许访问的客户端 IP (白名单)"
+    echo -e "8. 修改监听端口"
+    echo -e "9. 查看最近日志"
+    echo -e "10. 查看使用说明"
+    echo -e "0. 退出脚本"
+    echo -e "=================================="
+    read -p "请输入选项 [0-10]: " choice
+
+    case $choice in
+        1) check_sys; install_tinyproxy ;; 
+        2) uninstall_tinyproxy ;; 
+        3) start_tinyproxy ;; 
+        4) stop_tinyproxy ;; 
+        5) restart_tinyproxy ;; 
+        6) show_status ;; 
+        7) add_ip ;; 
+        8) modify_port ;; 
+        9) view_logs ;; 
+        10) show_usage_guide ;; 
+        0) echo -e "${GREEN}退出脚本。${PLAIN}"; exit 0 ;; 
+        *) echo -e "${RED}输入错误，请重新输入。${PLAIN}"; sleep 1; menu ;; 
+    esac
+    
+    menu
+}
+
+# 主逻辑
+check_root
+check_sys
+init_proxy_env
+
+if [ "$1" == "install" ]; then
+    install_tinyproxy
+else
+    menu
+fi
