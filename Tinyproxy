@@ -5,7 +5,7 @@
 # Author: Gemini
 # Description: Install and manage Tinyproxy easily
 # ==================================================
-# 公网IP获取已优化版本
+
 # 颜色定义
 RED='\033[31m'
 GREEN='\033[32m'
@@ -18,36 +18,57 @@ CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
 SCRIPT_PATH=$(readlink -f "$0")
 RELEASE=""
 
-# 获取本机公网 IPv4 地址（不要内网地址，不要 IPv6）
-get_public_ipv4() {
-    local ip=""
-    # 依次尝试多个服务，确保可靠性
-    ip=$(curl -4 -s --max-time 5 https://api.ipify.org 2>/dev/null) \
-    || ip=$(curl -4 -s --max-time 5 https://ifconfig.me 2>/dev/null) \
-    || ip=$(curl -4 -s --max-time 5 https://icanhazip.com 2>/dev/null) \
-    || ip=$(curl -4 -s --max-time 5 https://ip.sb 2>/dev/null)
+# 手动指定服务器 IPv4 地址
+DEFAULT_SERVER_IP="填写你自己的服务器公网 IPv4 地址"  # 请替换为你实际的服务器公网 IPv4 地址
 
-    # 去除可能的空白字符
-    ip=$(echo "$ip" | tr -d '[:space:]')
-
-    # 验证是否为合法 IPv4
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        echo "$ip"
-    else
-        # 兜底：如果全部失败，返回提示
-        echo "获取失败"
+# 环境变量初始化（从配置文件读取）
+init_proxy_env() {
+    if [[ -f $CONF_FILE ]]; then
+        PORT=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+        CLIENT_IP=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
+        
+        if [[ -n "$PORT" ]] && [[ -n "$CLIENT_IP" ]]; then
+            export HTTP_PROXY="http://$CLIENT_IP:$PORT"
+            export HTTPS_PROXY="http://$CLIENT_IP:$PORT"
+        fi
     fi
 }
 
-# ================================================
-# 以下内容保持不变，适配全局替换server_ip部分
-# 显示使用说明中修改调用 get_public_ipv4
+# 检查是否为 Root 用户
+check_root() {
+    [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 用户运行此脚本！${PLAIN}" && exit 1
+}
 
+# 系统检测
+check_sys() {
+    if [[ -f /etc/redhat-release ]]; then
+        RELEASE="centos"
+    elif [[ -f /etc/debian_version ]]; then
+        RELEASE="debian"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /etc/issue 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    elif cat /proc/version 2>/dev/null | grep -q -i "ubuntu"; then
+        RELEASE="ubuntu"
+    elif cat /proc/version 2>/dev/null | grep -q -i "debian"; then
+        RELEASE="debian"
+    else
+        RELEASE="unknown"
+    fi
+    
+    if [[ "${RELEASE}" == "unknown" ]]; then
+        echo -e "${RED}无法识别系统类型！${PLAIN}"
+        exit 1
+    fi
+}
+
+# 显示使用说明
 show_usage_guide() {
     local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
     local client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
-    local server_ip=$(get_public_ipv4)  # 替换为获取公网IPv4
-
+    local server_ip="$DEFAULT_SERVER_IP"  # 使用手动设置的服务器 IP
+    
     clear
     echo -e "${GREEN}=================================="
     echo -e " Tinyproxy 配置完成！${PLAIN}"
@@ -61,25 +82,13 @@ show_usage_guide() {
     echo -e "${BLUE}【完整代理地址】${PLAIN}"
     echo -e "${GREEN}http://$server_ip:$port${PLAIN}"
     echo ""
-    ...
-}  # 略去重复部分
-
-# 其余脚本逻辑保持一致
-# ================================================
-menu() {
-    clear
-    echo -e "=================================="
-    echo -e " ${GREEN}Tinyproxy 一键管理脚本${PLAIN}"
-    echo -e "=================================="
-    echo -e "1. 安装 Tinyproxy"
-    echo -e "2. 卸载 Tinyproxy"
-    echo -e "----------------------------------"
-    echo -e "3. 启动服务"
-    echo -e "4. 停止服务"
-    echo -e "5. 重启服务"
-    echo -e "6. 查看状态 & 端口 & 客户端IP"
-    ...
-}
-check_root
-check_sys
-menu
+    echo -e "${BLUE}【环境变量配置】${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ip:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ip:$port\"${PLAIN}"
+    echo ""
+    echo -e "${BLUE}【Linux 使用命令】${PLAIN}"
+    echo ""
+    echo -e "${YELLOW}1. 临时设置代理 (仅当前终端有效)${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export ftp_proxy=http://$server_ip:$port${PL
