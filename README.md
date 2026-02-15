@@ -2,7 +2,7 @@
 
 # 🚀 代理一键安装工具箱
 
-### 1. Tinyproxy (基础 HTTP)
+### 1. Tinyproxy (一键安装挂HTTP脚本)
 > 点击下方代码框即可快速选中复制
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Tinyproxy)
