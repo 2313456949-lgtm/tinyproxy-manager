@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# 检查是否为 root 用户
+if [[ $EUID -ne 0 ]]; then
+  echo "请以 root 权限运行此脚本 (sudo 运行即可)。"
+  exit 1
+fi
+
+echo "======================================"
+echo " 🌟 VPS 面板安装脚本 🌟"
+echo "======================================"
+echo "支持以下面板安装："
+echo "1. 哆啦A梦面板 (Doraemon Panel)"
+echo "2. Orris 面板 (Orris Panel)"
+echo "======================================"
+
+# 让用户选择面板
+read -p "请输入您想安装的面板序号 [1-2]: " PANEL_CHOICE
+
+if [[ "$PANEL_CHOICE" -eq 1 ]]; then
+  PANEL_NAME="哆啦A梦"
+  PANEL_INSTALL_URL="https://doraemon.example.com/install.sh"  # 替换为真实的哆啦A梦面板安装链接
+  LANGUAGE_CONFIG_PATH="/etc/doraemon/config.json"           # 假定语言配置文件路径
+elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
+  PANEL_NAME="Orris"
+  PANEL_INSTALL_URL="https://orris.example.com/install.sh"    # 替换为真实的 Oris 面板安装链接
+  LANGUAGE_CONFIG_PATH="/etc/orris/settings.conf"            # 假定语言配置文件路径
+else
+  echo "无效选择，请重新运行脚本。"
+  exit 1
+fi
+
+echo "======================================"
+echo "即将开始安装 $PANEL_NAME 面板..."
+echo "======================================"
+
+# 安装面板
+echo "下载并运行 $PANEL_NAME 安装程序..."
+wget -O install.sh "$PANEL_INSTALL_URL" && bash install.sh
+
+if [[ $? -ne 0 ]]; then
+  echo "$PANEL_NAME 安装失败，请检查安装链接或网络连接！"
+  exit 1
+fi
+
+echo "安装成功！即将切换面板语言为简体中文..."
+echo "======================================"
+
+# 切换语言到简体中文
+if [[ -f "$LANGUAGE_CONFIG_PATH" ]]; then
+  if [[ "$PANEL_CHOICE" -eq 1 ]]; then
+    # 为哆啦A梦面板设置中文
+    sed -i 's/"language": "en"/"language": "zh_CN"/g' "$LANGUAGE_CONFIG_PATH"
+  elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
+    # 为 Orris 面板设置中文
+    sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+  fi
+
+  echo "面板语言文件已修改为中文！"
+else
+  echo "语言配置文件未找到，可能需要手动设置。"
+fi
+
+# 重启面板以应用设置
+if [[ "$PANEL_CHOICE" -eq 1 ]]; then
+  systemctl restart doraemon-panel
+elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
+  systemctl restart orris-panel
+fi
+
+echo "======================================"
+echo "🎉 $PANEL_NAME 面板安装完成！"
+echo "🎉 并设置为中文！"
+echo "======================================"
