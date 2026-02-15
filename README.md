@@ -7,19 +7,24 @@
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Tinyproxy)
 ```
+### 2. Squid (一键安装挂HTTP脚本)
+> 点击下方代码框即可快速选中复制
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Squid)
+```
 ---
 
-### 2. Xray (多协议引擎)
+### 3. Xray (多协议引擎)
 ```bash
 wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/xray -O xray_install.sh && chmod +x xray_install.sh && ./xray_install.sh
 ```
 ---
 
-### 3. Shadowsocks 2022 (安全加密)
+### 4. Shadowsocks 2022 (安全加密)
 ```bash
 wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Shadowsocks2022 -O ss2022_install.sh && chmod +x ss2022_install.sh && ./ss2022_install.sh
 ```
-### 4. nftables(一键脚本转发）
+### 5. nftables(一键脚本转发）
 ```bash
 wget -O nftmgr https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/nftables && chmod +x nftmgr && ./nftmgr
 ```
