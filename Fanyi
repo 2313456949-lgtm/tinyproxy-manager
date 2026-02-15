@@ -7,23 +7,29 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "====================================="
-echo " 🌟 自动检测并翻译语言设置脚本 🌟"
+echo " 🌟 自动安装面板并翻译语言设置 🌟 "
 echo "====================================="
 
-# 定义默认扫描路径
-DEFAULT_PATHS=(
+# 示例：安装面板的命令（根据具体面板的安装方式替换）
+echo "📥 安装面板..."
+# 以下命令为示例，替换为您的安装命令
+curl -sSO https://example.com/installer.sh && bash installer.sh
+
+# 定义默认扫描路径（根据面板安装路径调整）
+PANEL_PATHS=(
+  "/www/server/panel"
   "/etc"
-  "/www"
   "/opt"
   "/usr/local"
-  "/home"
 )
 
 # 支持的文件类型
 FILE_EXTENSIONS=("*.json" "*.yaml" "*.yml" "*.conf" "*.ini")
 
-# 遍历所有路径并处理文件
-for SEARCH_PATH in "${DEFAULT_PATHS[@]}"; do
+echo "🔍 开始自动翻译语言文件..."
+
+# 遍历所有配置路径并处理文件
+for SEARCH_PATH in "${PANEL_PATHS[@]}"; do
   echo "🔍 正在扫描路径：$SEARCH_PATH"
   
   for EXT in "${FILE_EXTENSIONS[@]}"; do
@@ -65,15 +71,16 @@ for SEARCH_PATH in "${DEFAULT_PATHS[@]}"; do
   done
 done
 
-# 是否重启服务
-read -p "请输入需要重启的服务名（例如 nginx 或 apache2，若不需要重启直接按回车）： " SERVICE_NAME
-if [[ -n "$SERVICE_NAME" ]]; then
-  systemctl restart "$SERVICE_NAME"
-  echo "🎉 服务 $SERVICE_NAME 已重启以应用新配置。"
+# 是否重启面板服务（假设服务名为 bt）
+read -p "是否重启面板服务以应用语言设置？(y/n): " CONFIRM_RESTART
+if [[ $CONFIRM_RESTART == "y" ]]; then
+  # 示例服务名为 bt，根据实际服务名调整
+  systemctl restart bt
+  echo "🎉 面板服务已重启！"
 else
-  echo "🎉 翻译完成，无需重启服务！"
+  echo "🎉 翻译完成，无需重启服务。"
 fi
 
 echo "====================================="
-echo "🎉 自动检测与翻译操作完成！"
+echo "🎉 安装与翻译完成！"
 echo "====================================="
