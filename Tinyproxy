@@ -60,9 +60,9 @@ install_tinyproxy() {
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Tinyproxy 安装成功！${PLAIN}"
         
-        cp "$SCRIPT_PATH" /usr/local/bin/tpmenu 2>/dev/null
-        chmod +x /usr/local/bin/tpmenu 2>/dev/null
-        echo -e "${YELLOW}提示: 以后可以直接输入 'tpmenu' 命令来管理${PLAIN}"
+        cp "$SCRIPT_PATH" /usr/local/bin/Tinyproxy 2>/dev/null
+        chmod +x /usr/local/bin/Tinyproxy 2>/dev/null
+        echo -e "${YELLOW}提示: 以后可以直接输入 'Tinyproxy' 命令来管理${PLAIN}"
         
         [[ -f $CONF_FILE ]] && cp $CONF_FILE ${CONF_FILE}.bak.$(date +%s)
         sed -i 's/^Allow /#Allow /g' $CONF_FILE
@@ -165,7 +165,7 @@ uninstall_tinyproxy() {
     fi
     
     rm -rf /etc/tinyproxy
-    rm -f /usr/local/bin/tpmenu
+    rm -f /usr/local/bin/Tinyproxy
     echo -e "${GREEN}卸载完成！${PLAIN}"
 }
 
@@ -381,24 +381,26 @@ show_usage() {
 # 菜单
 menu() {
     clear
-    echo -e "=================================="
-    echo -e " ${GREEN}Tinyproxy 一键管理脚本${PLAIN}"
-    echo -e "=================================="
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo -e "${GREEN}   Tinyproxy 一键管理脚本${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
+    echo -e " 快捷管理命令: ${YELLOW}Tinyproxy${PLAIN}"
+    echo -e "${GREEN}==================================${PLAIN}"
     echo -e " 1. 安装 Tinyproxy"
     echo -e " 2. 卸载 Tinyproxy"
-    echo -e "----------------------------------"
+    echo -e "${GREEN}----------------------------------${PLAIN}"
     echo -e " 3. 启动服务"
     echo -e " 4. 停止服务"
     echo -e " 5. 重启服务"
     echo -e " 6. 查看状态"
-    echo -e "----------------------------------"
+    echo -e "${GREEN}----------------------------------${PLAIN}"
     echo -e " 7. 添加客户端IP"
     echo -e " 8. 修改端口"
     echo -e " 9. 修改客户端IP"
     echo -e "10. 查看日志"
     echo -e "11. 使用说明"
     echo -e " 0. 退出"
-    echo -e "=================================="
+    echo -e "${GREEN}==================================${PLAIN}"
     read -p "请输入选项 [0-11]: " choice
 
     case $choice in
