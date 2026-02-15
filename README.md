@@ -21,5 +21,5 @@ wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Sh
 ```
 ### 4. nftables(一键脚本转发）
 ```bash
-wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/nftables -O /etc/nftables.conf
+wget -O nftmgr https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/nftables && chmod +x nftmgr && ./nftmgr
 ```
