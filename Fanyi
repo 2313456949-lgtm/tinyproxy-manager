@@ -7,10 +7,10 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "====================================="
-echo " 🌟 自动切换语言到简体中文 脚本 🌟"
+echo " 🌟 自动检测并翻译语言设置脚本 🌟"
 echo "====================================="
 
-# 用户定义语言配置文件的路径
+# 用户定义语言配置文件路径
 read -p "请输入需要修改的语言文件路径（例如 /etc/app/settings.conf 或 /www/server/panel/config.json）： " LANGUAGE_CONFIG_PATH
 
 # 检查文件是否存在
@@ -19,30 +19,45 @@ if [[ ! -f "$LANGUAGE_CONFIG_PATH" ]]; then
   exit 1
 fi
 
-echo "检测到配置文件 $LANGUAGE_CONFIG_PATH，正在修改语言为简体中文..."
+echo "检测到配置文件 $LANGUAGE_CONFIG_PATH，正在检查需要翻译的内容..."
 
-# 自动根据文件类型进行处理
+# 自动检测需要翻译的字段并处理
 if [[ "$LANGUAGE_CONFIG_PATH" == *.json ]]; then
   # JSON 文件格式处理
-  sed -i 's/"language": "en"/"language": "zh_CN"/g' "$LANGUAGE_CONFIG_PATH"
-  echo "语言设置已更新（JSON）。"
+  DETECTION=$(grep '"language": "en"' "$LANGUAGE_CONFIG_PATH")
+  if [[ $DETECTION != "" ]]; then
+    sed -i 's/"language": "en"/"language": "zh_CN"/g' "$LANGUAGE_CONFIG_PATH"
+    echo "✅ 检测到字段并完成翻译（JSON）。"
+  else
+    echo "⚠️ 未检测到需要翻译的字段（JSON）。"
+  fi
 
 elif [[ "$LANGUAGE_CONFIG_PATH" == *.yaml || "$LANGUAGE_CONFIG_PATH" == *.yml ]]; then
   # YAML 文件格式处理
-  sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-  echo "语言设置已更新（YAML）。"
+  DETECTION=$(grep 'language: en' "$LANGUAGE_CONFIG_PATH")
+  if [[ $DETECTION != "" ]]; then
+    sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+    echo "✅ 检测到字段并完成翻译（YAML）。"
+  else
+    echo "⚠️ 未检测到需要翻译的字段（YAML）。"
+  fi
 
 elif [[ "$LANGUAGE_CONFIG_PATH" == *.conf || "$LANGUAGE_CONFIG_PATH" == *.ini ]]; then
   # INI/CONF 文件格式处理
-  sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-  echo "语言设置已更新（CONF/INI）。"
+  DETECTION=$(grep 'lang=en' "$LANGUAGE_CONFIG_PATH")
+  if [[ $DETECTION != "" ]]; then
+    sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+    echo "✅ 检测到字段并完成翻译（CONF/INI）。"
+  else
+    echo "⚠️ 未检测到需要翻译的字段（CONF/INI）。"
+  fi
 
 else
   echo "⚠️ 不支持的配置文件格式，请手动确认文件内容！"
   exit 1
 fi
 
-# 重启服务（示例服务需要替换为实际项目对应的服务名）
+# 提示用户是否重启服务
 read -p "请输入需要重启的服务名（例如 nginx 或 apache2，若不需要重启直接按回车）： " SERVICE_NAME
 if [[ -n "$SERVICE_NAME" ]]; then
   systemctl restart "$SERVICE_NAME"
@@ -52,5 +67,5 @@ else
 fi
 
 echo "====================================="
-echo "🎉 语言切换为简体中文完成！"
+echo "🎉 自动检测与翻译完成！"
 echo "====================================="
