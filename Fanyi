@@ -10,33 +10,36 @@ echo "====================================="
 echo " 🌟 自动检测并翻译语言设置脚本 🌟"
 echo "====================================="
 
-# 定义需要遍历的常见路径
-SEARCH_PATHS=(
+# 定义默认扫描路径
+DEFAULT_PATHS=(
   "/etc"
   "/www"
   "/opt"
+  "/usr/local"
+  "/home"
 )
 
-# 支持的文件类型及对应的处理规则
+# 支持的文件类型
 FILE_EXTENSIONS=("*.json" "*.yaml" "*.yml" "*.conf" "*.ini")
 
-# 遍历并检测需要翻译的文件
-for PATH in "${SEARCH_PATHS[@]}"; do
-  echo "🔍 正在扫描路径：$PATH"
-
+# 遍历所有路径并处理文件
+for SEARCH_PATH in "${DEFAULT_PATHS[@]}"; do
+  echo "🔍 正在扫描路径：$SEARCH_PATH"
+  
   for EXT in "${FILE_EXTENSIONS[@]}"; do
-    # 查找文件
-    FILES=$(find "$PATH" -type f -name "$EXT" 2>/dev/null)
+    # 查找指定类型的文件
+    FILES=$(find "$SEARCH_PATH" -type f -name "$EXT" 2>/dev/null)
 
     for FILE in $FILES; do
       echo "⚙️ 检测到文件：$FILE"
       
+      # 根据文件类型执行翻译
       if [[ "$FILE" == *.json ]]; then
         # JSON 文件处理
         DETECTION=$(grep '"language": "en"' "$FILE")
         if [[ $DETECTION != "" ]]; then
           sed -i 's/"language": "en"/"language": "zh_CN"/g' "$FILE"
-          echo "✅ 翻译完成（JSON）：$FILE"
+          echo "✅ 文件已翻译（JSON）：$FILE"
         fi
 
       elif [[ "$FILE" == *.yaml || "$FILE" == *.yml ]]; then
@@ -44,7 +47,7 @@ for PATH in "${SEARCH_PATHS[@]}"; do
         DETECTION=$(grep 'language: en' "$FILE")
         if [[ $DETECTION != "" ]]; then
           sed -i 's/language: en/language: zh_CN/g' "$FILE"
-          echo "✅ 翻译完成（YAML）：$FILE"
+          echo "✅ 文件已翻译（YAML）：$FILE"
         fi
 
       elif [[ "$FILE" == *.conf || "$FILE" == *.ini ]]; then
@@ -52,7 +55,7 @@ for PATH in "${SEARCH_PATHS[@]}"; do
         DETECTION=$(grep 'lang=en' "$FILE")
         if [[ $DETECTION != "" ]]; then
           sed -i 's/lang=en/lang=zh_CN/g' "$FILE"
-          echo "✅ 翻译完成（CONF/INI）：$FILE"
+          echo "✅ 文件已翻译（CONF/INI）：$FILE"
         fi
 
       else
@@ -62,15 +65,15 @@ for PATH in "${SEARCH_PATHS[@]}"; do
   done
 done
 
-# 提示用户是否重启服务
+# 是否重启服务
 read -p "请输入需要重启的服务名（例如 nginx 或 apache2，若不需要重启直接按回车）： " SERVICE_NAME
 if [[ -n "$SERVICE_NAME" ]]; then
   systemctl restart "$SERVICE_NAME"
   echo "🎉 服务 $SERVICE_NAME 已重启以应用新配置。"
 else
-  echo "🎉 翻译完成，未重启服务！"
+  echo "🎉 翻译完成，无需重启服务！"
 fi
 
 echo "====================================="
-echo "🎉 自动检测与翻译已全部完成！"
+echo "🎉 自动检测与翻译操作完成！"
 echo "====================================="
