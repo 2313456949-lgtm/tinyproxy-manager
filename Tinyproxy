@@ -18,15 +18,37 @@ CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
 SCRIPT_PATH=$(readlink -f "$0")
 RELEASE=""
 
-# 自动获取服务器 IP
+# 自动获取服务器 IP（优先公网IP）
 get_server_ip() {
-    # 优先获取公网 IP，失败则使用内网 IP
-    local public_ip=$(curl -s --max-time 3 ifconfig.me 2>/dev/null || curl -s --max-time 3 ip.sb 2>/dev/null)
-    if [[ -n "$public_ip" && "$public_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    local public_ip=""
+    echo -e "${YELLOW}正在自动检测服务器公网 IP 地址...${PLAIN}" >&2
+    
+    # 尝试多个公网IP检测服务
+    public_ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null)
+    if [[ -z "$public_ip" || ! "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        public_ip=$(curl -s --max-time 5 ip.sb 2>/dev/null)
+    fi
+    if [[ -z "$public_ip" || ! "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        public_ip=$(curl -s --max-time 5 ipinfo.io/ip 2>/dev/null)
+    fi
+    if [[ -z "$public_ip" || ! "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        public_ip=$(curl -s --max-time 5 api.ipify.org 2>/dev/null)
+    fi
+    if [[ -z "$public_ip" || ! "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        public_ip=$(curl -s --max-time 5 icanhazip.com 2>/dev/null)
+    fi
+    
+    # 返回结果
+    if [[ -n "$public_ip" && "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "$public_ip"
     else
-        hostname -I | awk '{print $1}'
+        echo ""
     fi
+}
+
+# 获取内网 IP
+get_local_ip() {
+    hostname -I | awk '{print $1}'
 }
 
 # 环境变量初始化（从配置文件读取）
@@ -71,11 +93,57 @@ check_sys() {
     fi
 }
 
+# 输入IP地址（自动获取公网IP，获取失败则手动输入）
+input_ip_address() {
+    local prompt_msg="$1"
+    local result_ip=""
+    
+    # 尝试获取公网IP
+    local detected_ip=$(get_server_ip)
+    local local_ip=$(get_local_ip)
+    
+    echo -e ""
+    echo -e "${BLUE}================================================${PLAIN}"
+    echo -e "${YELLOW}${prompt_msg}${PLAIN}"
+    echo -e "${BLUE}------------------------------------------------${PLAIN}"
+    
+    if [[ -n "$detected_ip" ]]; then
+        # 成功获取到公网IP
+        echo -e "自动检测到公网 IP: ${GREEN}$detected_ip${PLAIN}"
+        echo -e "本机内网 IP: ${YELLOW}$local_ip${PLAIN}"
+        echo -e "${BLUE}------------------------------------------------${PLAIN}"
+        echo -e "提示: 直接按 ${GREEN}Enter${PLAIN} 使用公网 IP"
+        echo -e "      或输入其他 IP 地址进行手动设置"
+        echo -e "${BLUE}================================================${PLAIN}"
+        read -p "请输入 IP 地址 [默认: $detected_ip]: " result_ip
+        [[ -z "$result_ip" ]] && result_ip="$detected_ip"
+    else
+        # 无法获取公网IP，需要手动输入
+        echo -e "${RED}无法自动获取公网 IP 地址${PLAIN}"
+        echo -e "本机内网 IP: ${YELLOW}$local_ip${PLAIN}"
+        echo -e "${BLUE}------------------------------------------------${PLAIN}"
+        echo -e "提示: 直接按 ${GREEN}Enter${PLAIN} 使用内网 IP"
+        echo -e "      或输入其他 IP 地址进行手动设置"
+        echo -e "${BLUE}================================================${PLAIN}"
+        read -p "请输入 IP 地址 [默认: $local_ip]: " result_ip
+        [[ -z "$result_ip" ]] && result_ip="$local_ip"
+    fi
+    
+    # 验证IP格式
+    while [[ ! "$result_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; do
+        echo -e "${RED}错误: IP 格式不正确，请重新输入！${PLAIN}"
+        read -p "请输入正确的 IP 地址: " result_ip
+    done
+    
+    echo "$result_ip"
+}
+
 # 显示使用说明
 show_usage_guide() {
     local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
     local client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
     local server_ip=$(get_server_ip)
+    [[ -z "$server_ip" ]] && server_ip=$(get_local_ip)
     
     clear
     echo -e "${GREEN}=================================="
@@ -144,7 +212,7 @@ show_usage_guide() {
     echo -e "   ${GREEN}proxy=http://$server_ip:$port${PLAIN}"
     echo ""
     echo -e "${YELLOW}12. pip 使用代理${PLAIN}"
-    echo -e "   ${GREEN}pip install -i https://pypi.org/simple --proxy http://$server_ip:$port package_name${PLAIN}"
+    echo -e "   ${GREEN}pip install --proxy http://$server_ip:$port package_name${PLAIN}"
     echo ""
     echo -e "${YELLOW}13. Git 使用代理${PLAIN}"
     echo -e "   ${GREEN}git config --global http.proxy http://$server_ip:$port${PLAIN}"
@@ -206,7 +274,7 @@ install_tinyproxy() {
     fi
 }
 
-# 配置向导 - 已修改：自动检测服务器 IP 作为默认值
+# 配置向导 - 自动获取公网IP，获取失败则手动输入
 configure_proxy() {
     echo -e "${YELLOW}--- 配置向导 ---${PLAIN}"
     
@@ -215,32 +283,15 @@ configure_proxy() {
     [[ -z "${port}" ]] && port="8888"
     sed -i "s/^Port .*/Port $port/" $CONF_FILE
     
-    # 自动检测服务器 IP
-    local detected_ip=$(get_server_ip)
-    
-    # 设置允许的客户端IP
-    echo -e ""
-    echo -e "${YELLOW}请输入允许连接的客户端 IP 地址${PLAIN}"
-    echo -e "提示: 检测到当前服务器 IP 为：${GREEN}$detected_ip${PLAIN}"
-    read -p "请输入客户端 IP (默认 $detected_ip，直接按 Enter 使用): " client_ip
-    
-    # 如果用户未输入，则使用自动检测的 IP
-    [[ -z "${client_ip}" ]] && client_ip="$detected_ip"
+    # 设置允许的客户端IP（自动获取公网IP，获取失败则手动输入）
+    local client_ip=$(input_ip_address "请设置允许连接的客户端 IP 地址")
     
     # 先清除已有的 Allow 规则（除注释外的）
     sed -i '/^Allow /d' $CONF_FILE
-
-    # 验证IP格式
-    if [[ $client_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        echo "Allow $client_ip" >> $CONF_FILE
-        echo -e "${GREEN}已设置允许的客户端IP: $client_ip${PLAIN}"
-    else
-        echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
-        echo -e "${YELLOW}重新设置...${PLAIN}"
-        sleep 1
-        configure_proxy
-        return
-    fi
+    
+    # 添加新的 Allow 规则
+    echo "Allow $client_ip" >> $CONF_FILE
+    echo -e "${GREEN}已设置允许的客户端IP: $client_ip${PLAIN}"
 
     echo -e "${GREEN}配置已完成。${PLAIN}"
     sleep 1
@@ -310,6 +361,7 @@ show_status() {
         port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
         client_ip=$(grep "^Allow " $CONF_FILE | awk '{print $2}')
         server_ip=$(get_server_ip)
+        [[ -z "$server_ip" ]] && server_ip=$(get_local_ip)
         echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
         echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
         echo -e "监听端口: ${YELLOW}$port${PLAIN}"
@@ -330,32 +382,24 @@ view_logs() {
     sleep 3
 }
 
-# 添加 IP - 已修改：自动检测服务器 IP 作为默认值
+# 添加 IP - 自动获取公网IP，获取失败则手动输入
 add_ip() {
-    local detected_ip=$(get_server_ip)
-    echo -e "提示: 检测到当前服务器 IP 为：${GREEN}$detected_ip${PLAIN}"
-    read -p "请输入要添加的客户端白名单 IP (默认 $detected_ip): " new_ip
+    local new_ip=$(input_ip_address "请输入要添加到白名单的客户端 IP")
     
-    # 如果用户未输入，则使用自动检测的 IP
-    [[ -z "${new_ip}" ]] && new_ip="$detected_ip"
-    
-    # 验证IP格式
-    if [[ $new_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        # 检查是否已存在
-        if grep -q "^Allow $new_ip" $CONF_FILE; then
-            echo -e "${YELLOW}此 IP 已存在。${PLAIN}"
-        else
-            echo "Allow $new_ip" >> $CONF_FILE
-            echo -e "${GREEN}已添加 $new_ip${PLAIN}"
-            restart_tinyproxy
-        fi
+    # 检查是否已存在
+    if grep -q "^Allow $new_ip" $CONF_FILE; then
+        echo -e "${YELLOW}此 IP 已存在于白名单中。${PLAIN}"
     else
-        echo -e "${RED}错误: IP 格式不正确！${PLAIN}"
+        echo "Allow $new_ip" >> $CONF_FILE
+        echo -e "${GREEN}已成功添加 IP: $new_ip${PLAIN}"
+        restart_tinyproxy
     fi
     sleep 2
 }
 
 modify_port() {
+    local current_port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    echo -e "当前端口: ${YELLOW}$current_port${PLAIN}"
     read -p "请输入新端口: " new_port
     if [[ -z "${new_port}" ]]; then
         echo -e "${RED}端口不能为空。${PLAIN}"
@@ -366,6 +410,27 @@ modify_port() {
         sleep 2
         show_usage_guide
     fi
+}
+
+# 修改服务器 IP（新增功能）
+modify_server_ip() {
+    echo -e "${YELLOW}--- 修改服务器 IP ---${PLAIN}"
+    
+    # 显示当前配置
+    local current_ip=$(grep "^Allow " $CONF_FILE | head -1 | awk '{print $2}')
+    echo -e "当前允许的客户端 IP: ${YELLOW}$current_ip${PLAIN}"
+    
+    # 获取新IP
+    local new_ip=$(input_ip_address "请输入新的客户端 IP 地址")
+    
+    # 更新配置
+    sed -i '/^Allow /d' $CONF_FILE
+    echo "Allow $new_ip" >> $CONF_FILE
+    echo -e "${GREEN}已更新客户端 IP: $new_ip${PLAIN}"
+    
+    restart_tinyproxy
+    sleep 2
+    show_usage_guide
 }
 
 # 菜单
@@ -384,11 +449,12 @@ menu() {
     echo -e "----------------------------------"
     echo -e "7. 添加允许访问的客户端 IP (白名单)"
     echo -e "8. 修改监听端口"
-    echo -e "9. 查看最近日志"
-    echo -e "10. 查看使用说明"
+    echo -e "9. 修改客户端 IP"
+    echo -e "10. 查看最近日志"
+    echo -e "11. 查看使用说明"
     echo -e "0. 退出脚本"
     echo -e "=================================="
-    read -p "请输入选项 [0-10]: " choice
+    read -p "请输入选项 [0-11]: " choice
 
     case $choice in
         1) check_sys; install_tinyproxy ;; 
@@ -399,8 +465,9 @@ menu() {
         6) show_status ;; 
         7) add_ip ;; 
         8) modify_port ;; 
-        9) view_logs ;; 
-        10) show_usage_guide ;; 
+        9) modify_server_ip ;;
+        10) view_logs ;; 
+        11) show_usage_guide ;; 
         0) echo -e "${GREEN}退出脚本。${PLAIN}"; exit 0 ;; 
         *) echo -e "${RED}输入错误，请重新输入。${PLAIN}"; sleep 1; menu ;; 
     esac
