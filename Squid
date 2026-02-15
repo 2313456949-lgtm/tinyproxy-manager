@@ -115,27 +115,77 @@ configure_squid() {
     
     # 生成配置文件
     cat > $CONF_FILE << EOF
-# Squid 配置文件
-# 监听端口
+# ==================================================
+# Squid 代理服务器配置文件
+# ==================================================
+
+# 监听端口（仅IPv4）
 http_port $port
 
-# 允许的客户端IP
-acl allowed_clients src $client_ip
-http_access allow allowed_clients
+# ==================================================
+# 访问控制列表 (ACL)
+# ==================================================
+
+# 本地网络
+acl localhost src 127.0.0.1/32
+acl localnet src 10.0.0.0/8
+acl localnet src 172.16.0.0/12
+acl localnet src 192.168.0.0/16
+
+# SSL端口
+acl SSL_ports port 443
+acl Safe_ports port 80
+acl Safe_ports port 21
+acl Safe_ports port 443
+acl Safe_ports port 70
+acl Safe_ports port 210
+acl Safe_ports port 1025-65535
+acl Safe_ports port 280
+acl Safe_ports port 488
+acl Safe_ports port 591
+acl Safe_ports port 777
+acl CONNECT method CONNECT
+
+# ==================================================
+# IP白名单配置
+# ==================================================
+
+# 允许的客户端IP白名单
+acl whitelist src $client_ip
+
+# ==================================================
+# 访问控制规则
+# ==================================================
+
+# 拒绝非安全端口
+http_access deny !Safe_ports
+
+# 拒绝非SSL端口的CONNECT请求
+http_access deny CONNECT !SSL_ports
+
+# 允许本地访问
+http_access allow localhost
+
+# 允许白名单IP访问
+http_access allow whitelist
 
 # 拒绝其他所有访问
 http_access deny all
 
+# ==================================================
+# 匿名代理设置（隐藏真实IP）
+# ==================================================
+
 # 禁用IPv6
 dns_v4_first on
 
-# 隐藏版本信息
+# 隐藏Squid版本信息
 httpd_suppress_version_string on
 
-# 禁用 Via 头
+# 禁用Via头
 via off
 
-# 禁用 X-Forwarded-For
+# 禁用X-Forwarded-For（高匿代理）
 forwarded_for off
 
 # 请求头隐藏
@@ -144,20 +194,46 @@ request_header_access Server deny all
 request_header_access Referer deny all
 request_header_access X-Forwarded-For deny all
 request_header_access Via deny all
+request_header_access Cache-Control deny all
 
+# ==================================================
 # 缓存设置
-cache_mem 64 MB
-maximum_object_size 4 MB
-cache_dir ufs /var/spool/squid 100 16 256
+# ==================================================
 
+cache_mem 128 MB
+maximum_object_size 64 MB
+minimum_object_size 0 KB
+cache_dir ufs /var/spool/squid 1000 16 256
+
+# ==================================================
 # 日志设置
+# ==================================================
+
 access_log /var/log/squid/access.log
 cache_log /var/log/squid/cache.log
+cache_store_log /var/log/squid/store.log
 
-# 连接超时
+# ==================================================
+# 超时设置
+# ==================================================
+
 connect_timeout 60 seconds
 read_timeout 60 seconds
 request_timeout 60 seconds
+client_lifetime 1 day
+pconn_timeout 60 seconds
+
+# ==================================================
+# 性能优化
+# ==================================================
+
+# 最大连接数
+max_filedescriptors 65535
+
+# DNS缓存
+dns_nameservers 8.8.8.8 8.8.4.4
+positive_dns_ttl 6 hours
+negative_dns_ttl 1 minute
 EOF
 
     echo -e "${GREEN}配置文件已生成${PLAIN}"
@@ -165,6 +241,7 @@ EOF
     # 初始化缓存目录
     echo -e "${YELLOW}正在初始化缓存目录...${PLAIN}"
     squid -z 2>/dev/null
+    sleep 2
 
     echo -e ""
     echo -e "${YELLOW}正在重启服务...${PLAIN}"
@@ -189,8 +266,8 @@ EOF
         echo -e ""
         echo -e "${YELLOW}常见问题：${PLAIN}"
         echo -e "1. 端口被占用，请更换端口"
-        echo -e "2. 配置文件错误，查看 $CONF_FILE"
-        echo -e "3. 检查配置: squid -k parse"
+        echo -e "2. 配置文件错误，运行: squid -k parse"
+        echo -e "3. 查看日志: tail -f /var/log/squid/cache.log"
     fi
 }
 
@@ -256,33 +333,90 @@ show_status() {
     echo -e ""
     if systemctl is-active --quiet squid; then
         local port=$(grep "^http_port" $CONF_FILE | awk '{print $2}')
-        local client_ip=$(grep "^acl allowed_clients src" $CONF_FILE | awk '{print $4}')
         local server_ip=$(get_public_ip)
         echo -e "${GREEN}Squid 状态: [运行中]${PLAIN}"
         echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
         echo -e "监听端口: ${YELLOW}$port${PLAIN}"
-        echo -e "客户端IP: ${YELLOW}$client_ip${PLAIN}"
         echo -e "代理地址: ${GREEN}http://$server_ip:$port${PLAIN}"
+        echo -e ""
+        echo -e "${BLUE}【开机自启状态】${PLAIN}"
+        if systemctl is-enabled --quiet squid; then
+            echo -e "开机自启: ${GREEN}已启用${PLAIN}"
+        else
+            echo -e "开机自启: ${RED}未启用${PLAIN}"
+        fi
+        echo -e ""
+        echo -e "${BLUE}【当前白名单IP】${PLAIN}"
+        grep "^acl whitelist src\|^acl client_" $CONF_FILE | awk '{print $4}'
     else
         echo -e "${RED}Squid 状态: [未运行]${PLAIN}"
     fi
 }
 
-# 添加IP
+# 查看白名单
+view_whitelist() {
+    echo -e ""
+    echo -e "${BLUE}========== IP白名单列表 ==========${PLAIN}"
+    echo -e ""
+    local count=1
+    while read line; do
+        local ip=$(echo "$line" | awk '{print $4}')
+        echo -e " ${GREEN}$count.${PLAIN} $ip"
+        ((count++))
+    done < <(grep "^acl whitelist src\|^acl client_" $CONF_FILE)
+    echo -e ""
+    echo -e "${BLUE}==================================${PLAIN}"
+}
+
+# 添加IP到白名单
 add_ip() {
     echo -e ""
-    read -p "请输入要添加的客户端IP: " new_ip
-    if [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        if grep -q "acl client_$new_ip" $CONF_FILE; then
+    echo -e "${BLUE}【添加IP到白名单】${PLAIN}"
+    echo -e "支持格式:"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
+    echo -e ""
+    read -p "请输入要添加的IP: " new_ip
+    
+    if [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then
+        # 生成唯一的ACL名称
+        local acl_name="client_$(echo $new_ip | tr './' '__')"
+        
+        if grep -q "src $new_ip" $CONF_FILE; then
             echo -e "${YELLOW}此IP已存在白名单中！${PLAIN}"
         else
             # 在 http_access deny all 之前添加
-            sed -i "/^http_access deny all/i acl client_$new_ip src $new_ip\nhttp_access allow client_$new_ip" $CONF_FILE
-            echo -e "${GREEN}已添加IP: $new_ip${PLAIN}"
+            sed -i "/^# 拒绝其他所有访问/i # 白名单IP: $new_ip\nacl $acl_name src $new_ip\nhttp_access allow $acl_name\n" $CONF_FILE
+            echo -e "${GREEN}已添加IP到白名单: $new_ip${PLAIN}"
             restart_service
         fi
     else
         echo -e "${RED}IP格式错误！${PLAIN}"
+    fi
+}
+
+# 删除白名单IP
+del_ip() {
+    echo -e ""
+    view_whitelist
+    echo -e ""
+    read -p "请输入要删除的IP: " del_ip
+    
+    if [[ -z "$del_ip" ]]; then
+        echo -e "${RED}IP不能为空！${PLAIN}"
+        return
+    fi
+    
+    if grep -q "src $del_ip" $CONF_FILE; then
+        # 删除相关的ACL和http_access行
+        local acl_name=$(grep "src $del_ip" $CONF_FILE | awk '{print $2}')
+        sed -i "/acl $acl_name src/d" $CONF_FILE
+        sed -i "/http_access allow $acl_name/d" $CONF_FILE
+        sed -i "/# 白名单IP: $del_ip/d" $CONF_FILE
+        echo -e "${GREEN}已从白名单删除IP: $del_ip${PLAIN}"
+        restart_service
+    else
+        echo -e "${RED}此IP不在白名单中！${PLAIN}"
     fi
 }
 
@@ -300,34 +434,133 @@ modify_port() {
     fi
 }
 
-# 改客户端IP
-modify_client_ip() {
-    local cur=$(grep "^acl allowed_clients src" $CONF_FILE | awk '{print $4}')
-    echo -e "当前客户端IP: ${YELLOW}$cur${PLAIN}"
-    read -p "请输入新客户端IP: " new_ip
-    if [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        sed -i "s/^acl allowed_clients src .*/acl allowed_clients src $new_ip/" $CONF_FILE
-        echo -e "${GREEN}客户端IP已修改: $new_ip${PLAIN}"
-        restart_service
+# 开机自启管理
+manage_autostart() {
+    echo -e ""
+    echo -e "${BLUE}========== 开机自启管理 ==========${PLAIN}"
+    if systemctl is-enabled --quiet squid; then
+        echo -e "当前状态: ${GREEN}已启用${PLAIN}"
     else
-        echo -e "${RED}IP格式错误！${PLAIN}"
+        echo -e "当前状态: ${RED}未启用${PLAIN}"
     fi
+    echo -e ""
+    echo -e " 1. 启用开机自启"
+    echo -e " 2. 禁用开机自启"
+    echo -e " 0. 返回"
+    echo -e ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            systemctl enable squid
+            echo -e "${GREEN}已启用开机自启${PLAIN}"
+            ;;
+        2)
+            systemctl disable squid
+            echo -e "${GREEN}已禁用开机自启${PLAIN}"
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}输入错误${PLAIN}"
+            ;;
+    esac
+}
+
+# 访问控制管理
+access_control() {
+    echo -e ""
+    echo -e "${BLUE}========== 访问控制管理 ==========${PLAIN}"
+    echo -e ""
+    echo -e " 1. 查看白名单"
+    echo -e " 2. 添加IP到白名单"
+    echo -e " 3. 删除白名单IP"
+    echo -e " 4. 允许所有IP访问 (不推荐)"
+    echo -e " 5. 仅允许白名单访问"
+    echo -e " 0. 返回"
+    echo -e ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            view_whitelist
+            ;;
+        2)
+            add_ip
+            ;;
+        3)
+            del_ip
+            ;;
+        4)
+            echo -e "${RED}警告: 允许所有IP访问会带来安全风险！${PLAIN}"
+            read -p "确认要允许所有IP访问吗？(y/n): " confirm
+            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                sed -i "s/^http_access deny all/http_access allow all/" $CONF_FILE
+                echo -e "${GREEN}已允许所有IP访问${PLAIN}"
+                restart_service
+            fi
+            ;;
+        5)
+            sed -i "s/^http_access allow all/http_access deny all/" $CONF_FILE
+            echo -e "${GREEN}已设置为仅允许白名单访问${PLAIN}"
+            restart_service
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}输入错误${PLAIN}"
+            ;;
+    esac
 }
 
 # 查看日志
 view_logs() {
-    echo -e "${BLUE}========== 最近日志 ==========${PLAIN}"
-    if [[ -f /var/log/squid/access.log ]]; then
-        tail -n 20 /var/log/squid/access.log
-    else
-        journalctl -u squid -n 20 --no-pager
-    fi
+    echo -e "${BLUE}========== 日志查看 ==========${PLAIN}"
+    echo -e ""
+    echo -e " 1. 访问日志 (access.log)"
+    echo -e " 2. 缓存日志 (cache.log)"
+    echo -e " 3. 系统日志 (journalctl)"
+    echo -e " 0. 返回"
+    echo -e ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            if [[ -f /var/log/squid/access.log ]]; then
+                tail -n 30 /var/log/squid/access.log
+            else
+                echo -e "${RED}访问日志不存在${PLAIN}"
+            fi
+            ;;
+        2)
+            if [[ -f /var/log/squid/cache.log ]]; then
+                tail -n 30 /var/log/squid/cache.log
+            else
+                echo -e "${RED}缓存日志不存在${PLAIN}"
+            fi
+            ;;
+        3)
+            journalctl -u squid -n 30 --no-pager
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}输入错误${PLAIN}"
+            ;;
+    esac
 }
 
 # 检查配置
 check_config() {
-    echo -e "${BLUE}========== 检查配置 ==========${PLAIN}"
+    echo -e "${BLUE}========== 检查配置语法 ==========${PLAIN}"
     squid -k parse
+    if [ $? -eq 0 ]; then
+        echo -e ""
+        echo -e "${GREEN}配置文件语法正确！${PLAIN}"
+    fi
 }
 
 # 使用说明（带参数）
@@ -335,88 +568,134 @@ show_usage_with_ip() {
     local server_ip="$1"
     local port="$2"
     
-    echo -e "${GREEN}==================================${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
     echo -e "${BLUE}【完整代理地址】${PLAIN}"
     echo -e "${GREEN}http://$server_ip:$port${PLAIN}"
-    echo -e "${GREEN}==================================${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
     echo -e ""
     echo -e "${BLUE}【环境变量配置】${PLAIN}"
     echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ip:$port\"${PLAIN}"
     echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ip:$port\"${PLAIN}"
     echo -e ""
-    echo -e "${BLUE}【Linux 使用命令】${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
+    echo -e "${BLUE}【在另外一台服务器上使用代理】${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}1. 临时设置代理 (仅当前终端有效)${PLAIN}"
+    echo -e "${YELLOW}方法1: 临时设置代理 (仅当前终端有效)${PLAIN}"
     echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
     echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
     echo -e "   ${GREEN}export ftp_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export no_proxy=localhost,127.0.0.1${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}2. 一行命令临时设置代理${PLAIN}"
-    echo -e "   ${GREEN}export HTTP_PROXY=http://$server_ip:$port HTTPS_PROXY=http://$server_ip:$port${PLAIN}"
+    echo -e "${YELLOW}方法2: 一行命令设置代理${PLAIN}"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port https_proxy=http://$server_ip:$port${PLAIN}"
     echo -e ""
-    echo -e "${BLUE}【在另一台机器上测试网络连通】${PLAIN}"
+    echo -e "${YELLOW}方法3: 永久设置代理 (所有用户)${PLAIN}"
+    echo -e "   编辑 ${BLUE}/etc/profile${PLAIN} 或 ${BLUE}/etc/environment${PLAIN} 文件末尾添加:"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export ftp_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export no_proxy=localhost,127.0.0.1${PLAIN}"
+    echo -e "   然后执行: ${GREEN}source /etc/profile${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}3. 测试代理是否可用${PLAIN}"
+    echo -e "${YELLOW}方法4: 当前用户永久设置${PLAIN}"
+    echo -e "   编辑 ${BLUE}~/.bashrc${PLAIN} 或 ${BLUE}~/.bash_profile${PLAIN} 文件末尾添加:"
+    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   然后执行: ${GREEN}source ~/.bashrc${PLAIN}"
+    echo -e ""
+    echo -e "${GREEN}==================================================================${PLAIN}"
+    echo -e "${BLUE}【测试代理连接】${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}1. 测试代理是否可用${PLAIN}"
     echo -e "   ${GREEN}curl -x http://$server_ip:$port http://httpbin.org/ip${PLAIN}"
-    echo -e "   说明: 返回IP地址说明代理正常工作"
+    echo -e "   说明: 返回代理服务器IP地址说明代理正常工作"
     echo -e ""
-    echo -e "${YELLOW}4. 测试端口是否开放${PLAIN}"
+    echo -e "${YELLOW}2. 测试端口是否开放${PLAIN}"
     echo -e "   ${GREEN}nc -zv $server_ip $port${PLAIN}"
     echo -e "   或者"
     echo -e "   ${GREEN}telnet $server_ip $port${PLAIN}"
     echo -e "   说明: 连接成功说明端口正常开放"
     echo -e ""
-    echo -e "${YELLOW}5. 使用wget测试代理${PLAIN}"
+    echo -e "${YELLOW}3. 使用wget测试代理${PLAIN}"
     echo -e "   ${GREEN}wget -e use_proxy=yes -e http_proxy=http://$server_ip:$port http://www.google.com -O /tmp/test.html${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}6. 设置代理后测试访问${PLAIN}"
+    echo -e "${YELLOW}4. 设置代理后测试访问${PLAIN}"
     echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
     echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}curl -I http://www.google.com${PLAIN}"
     echo -e "   ${GREEN}curl http://httpbin.org/ip${PLAIN}"
     echo -e ""
-    echo -e "${BLUE}【永久设置代理】${PLAIN}"
+    echo -e "${YELLOW}5. 测试HTTPS代理${PLAIN}"
+    echo -e "   ${GREEN}curl -x http://$server_ip:$port https://www.google.com${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}7. 所有用户永久设置${PLAIN}"
-    echo -e "   编辑 ${BLUE}/etc/profile${PLAIN} 文件末尾添加:"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
-    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
-    echo -e "   然后执行: ${GREEN}source /etc/profile${PLAIN}"
-    echo -e ""
-    echo -e "${YELLOW}8. 当前用户永久设置${PLAIN}"
-    echo -e "   编辑 ${BLUE}~/.bashrc${PLAIN} 文件末尾添加:"
-    echo -e "   ${GREEN}export http_proxy=http://$server_ip:$port${PLAIN}"
-    echo -e "   ${GREEN}export https_proxy=http://$server_ip:$port${PLAIN}"
-    echo -e "   然后执行: ${GREEN}source ~/.bashrc${PLAIN}"
-    echo -e ""
+    echo -e "${GREEN}==================================================================${PLAIN}"
     echo -e "${BLUE}【常用软件代理设置】${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}9. Docker 使用代理${PLAIN}"
+    echo -e "${YELLOW}Docker 使用代理${PLAIN}"
+    echo -e "   方法1: 运行时指定"
     echo -e "   ${GREEN}docker run --env HTTP_PROXY=http://$server_ip:$port --env HTTPS_PROXY=http://$server_ip:$port image_name${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}10. Git 使用代理${PLAIN}"
+    echo -e "   方法2: Docker守护进程代理"
+    echo -e "   创建文件 ${BLUE}/etc/systemd/system/docker.service.d/proxy.conf${PLAIN}"
+    echo -e "   ${GREEN}[Service]${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ip:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ip:$port\"${PLAIN}"
+    echo -e "   然后执行:"
+    echo -e "   ${GREEN}systemctl daemon-reload${PLAIN}"
+    echo -e "   ${GREEN}systemctl restart docker${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}Git 使用代理${PLAIN}"
     echo -e "   ${GREEN}git config --global http.proxy http://$server_ip:$port${PLAIN}"
     echo -e "   ${GREEN}git config --global https.proxy http://$server_ip:$port${PLAIN}"
+    echo -e "   取消代理:"
+    echo -e "   ${GREEN}git config --global --unset http.proxy${PLAIN}"
+    echo -e "   ${GREEN}git config --global --unset https.proxy${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}11. pip 使用代理${PLAIN}"
+    echo -e "${YELLOW}pip 使用代理${PLAIN}"
     echo -e "   ${GREEN}pip install --proxy http://$server_ip:$port package_name${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}12. apt-get 使用代理${PLAIN}"
+    echo -e "${YELLOW}apt-get 使用代理${PLAIN}"
+    echo -e "   临时使用:"
     echo -e "   ${GREEN}apt-get -o Acquire::http::Proxy=http://$server_ip:$port update${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}13. yum 使用代理${PLAIN}"
+    echo -e "   永久设置: 编辑 ${BLUE}/etc/apt/apt.conf.d/proxy.conf${PLAIN}"
+    echo -e "   ${GREEN}Acquire::http::Proxy \"http://$server_ip:$port\";${PLAIN}"
+    echo -e "   ${GREEN}Acquire::https::Proxy \"http://$server_ip:$port\";${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}yum 使用代理${PLAIN}"
     echo -e "   编辑 ${BLUE}/etc/yum.conf${PLAIN} 添加:"
     echo -e "   ${GREEN}proxy=http://$server_ip:$port${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}14. systemd 服务使用代理${PLAIN}"
+    echo -e "${YELLOW}wget 使用代理${PLAIN}"
+    echo -e "   临时使用:"
+    echo -e "   ${GREEN}wget -e http_proxy=http://$server_ip:$port URL${PLAIN}"
+    echo -e ""
+    echo -e "   永久设置: 编辑 ${BLUE}~/.wgetrc${PLAIN}"
+    echo -e "   ${GREEN}http_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}https_proxy=http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}use_proxy=on${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}curl 使用代理${PLAIN}"
+    echo -e "   ${GREEN}curl -x http://$server_ip:$port URL${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}npm 使用代理${PLAIN}"
+    echo -e "   ${GREEN}npm config set proxy http://$server_ip:$port${PLAIN}"
+    echo -e "   ${GREEN}npm config set https-proxy http://$server_ip:$port${PLAIN}"
+    echo -e ""
+    echo -e "${YELLOW}systemd 服务使用代理${PLAIN}"
     echo -e "   编辑服务文件 ${BLUE}/etc/systemd/system/xxx.service${PLAIN}"
     echo -e "   在 [Service] 段添加:"
     echo -e "   ${GREEN}Environment=\"HTTP_PROXY=http://$server_ip:$port\"${PLAIN}"
     echo -e "   ${GREEN}Environment=\"HTTPS_PROXY=http://$server_ip:$port\"${PLAIN}"
+    echo -e "   ${GREEN}Environment=\"NO_PROXY=localhost,127.0.0.1\"${PLAIN}"
     echo -e ""
-    echo -e "${YELLOW}15. 取消代理设置${PLAIN}"
-    echo -e "   ${GREEN}unset http_proxy https_proxy ftp_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY${PLAIN}"
+    echo -e "${YELLOW}取消代理设置${PLAIN}"
+    echo -e "   ${GREEN}unset http_proxy https_proxy ftp_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY no_proxy NO_PROXY${PLAIN}"
     echo -e ""
-    echo -e "${GREEN}==================================${PLAIN}"
+    echo -e "${GREEN}==================================================================${PLAIN}"
 }
 
 # 使用说明
@@ -445,9 +724,9 @@ menu() {
     echo -e " 5. 重启服务"
     echo -e " 6. 查看状态"
     echo -e "${GREEN}----------------------------------${PLAIN}"
-    echo -e " 7. 添加客户端IP"
+    echo -e " 7. 访问控制 (IP白名单)"
     echo -e " 8. 修改端口"
-    echo -e " 9. 修改客户端IP"
+    echo -e " 9. 开机自启管理"
     echo -e "10. 查看日志"
     echo -e "11. 检查配置"
     echo -e "12. 使用说明"
@@ -462,9 +741,9 @@ menu() {
         4) stop_service ;;
         5) restart_service ;;
         6) show_status ;;
-        7) add_ip ;;
+        7) access_control ;;
         8) modify_port ;;
-        9) modify_client_ip ;;
+        9) manage_autostart ;;
         10) view_logs ;;
         11) check_config ;;
         12) show_usage ;;
