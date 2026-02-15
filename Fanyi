@@ -7,75 +7,116 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "======================================"
-echo " 🌟 VPS 面板安装脚本 🌟"
+echo " 🌟 VPS 面板 + Docker 自动安装脚本 🌟"
 echo "======================================"
 echo "支持以下面板安装："
-echo "1. Orris 面板 (Orris Panel)"
-echo "2. Flux 面板 (Flux Panel)"
+echo "1. Docker 自动安装"
+echo "2. Orris 面板 (Orris Panel)"
+echo "3. Flux 面板 (Flux Panel)"
 echo "======================================"
 
 # 检查是否传入 $do 参数自动选择面板
 if [[ -z "$do" ]]; then
   # 无 $do 参数输入则用户手动选择
-  read -p "请输入您想安装的面板序号 [1-2]: " PANEL_CHOICE
+  read -p "请输入您想安装的序号 [1-3]: " PANEL_CHOICE
 else
   # 若 $do 参数非空，则按 $do 值自动选择面板
   echo "检测到环境变量 do，值为: $do"
   PANEL_CHOICE="$do"
 fi
 
-# 设置面板信息
-if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-  PANEL_NAME="Orris"
-  PANEL_INSTALL_URL="https://orris.example.com/install.sh"    # 替换为真实 Oris 面板安装链接
-  LANGUAGE_CONFIG_PATH="/etc/orris/settings.conf"
-
-elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
-  PANEL_NAME="Flux"
-  PANEL_INSTALL_URL="https://flux.example.com/install.sh"     # 替换为真实 Flux 面板安装链接
-  LANGUAGE_CONFIG_PATH="/etc/flux/config.yaml"
-
-else
-  echo "无效选择，请重新运行脚本。"
-  exit 1
-fi
-
-echo "======================================"
-echo "即将开始安装 $PANEL_NAME 面板..."
-echo "======================================"
-
-# 下载并运行脚本
-echo "下载 $PANEL_NAME 安装程序..."
-wget -O install.sh "$PANEL_INSTALL_URL" && bash install.sh
-
-if [[ $? -ne 0 ]]; then
-  echo "$PANEL_NAME 安装失败，请检查安装链接或网络连接！"
-  exit 1
-fi
-
-echo "安装成功！即将切换面板语言为简体中文..."
-echo "======================================"
-
-# 切换语言到简体中文
-if [[ -f "$LANGUAGE_CONFIG_PATH" ]]; then
-  if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-    sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-  elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
-    sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+# Docker 安装函数
+install_docker() {
+  echo "======================================"
+  echo "开始安装 Docker..."
+  echo "======================================"
+  # 更新包管理器并安装必需的依赖
+  apt update && apt install -y apt-transport-https ca-certificates curl software-properties-common
+  
+  # 添加 Docker 官方 GPG 密钥
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  
+  # 添加 Docker 软件包仓库
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  
+  # 安装 Docker
+  apt update && apt install -y docker-ce docker-ce-cli containerd.io
+  
+  # 检查 Docker 安装结果
+  if [[ $(docker --version) ]]; then
+    echo "🎉 Docker 安装成功！"
+  else
+    echo "❌ Docker 安装失败，请检查网络或安装步骤！"
+    exit 1
   fi
-  echo "面板语言文件已修改为中文！"
-else
-  echo "语言配置文件未找到，可能需要手动设置。"
-fi
+}
 
-# 重启面板以应用设置
-if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-  systemctl restart orris-panel
-elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
-  systemctl restart flux-panel
-fi
+# 面板安装逻辑
+install_panel() {
+  if [[ "$PANEL_CHOICE" -eq 2 ]]; then
+    PANEL_NAME="Orris"
+    PANEL_INSTALL_URL="https://github.com/OrrisPanel/OrrisInstaller/raw/main/install.sh"
+    LANGUAGE_CONFIG_PATH="/etc/orris/settings.conf"
+  elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+    PANEL_NAME="Flux"
+    PANEL_INSTALL_URL="https://github.com/FluxPanel/FluxInstaller/raw/main/install.sh"
+    LANGUAGE_CONFIG_PATH="/etc/flux/config.yaml"
+  else
+    echo "无效选择，请重新运行脚本。"
+    exit 1
+  fi
+  
+  echo "======================================"
+  echo "即将开始安装 $PANEL_NAME 面板..."
+  echo "======================================"
 
-echo "======================================"
-echo "🎉 $PANEL_NAME 面板安装完成！"
-echo "🎉 并设置为中文！"
-echo "======================================"
+  # 下载并运行面板安装脚本
+  echo "下载 $PANEL_NAME 安装程序..."
+  wget -O install.sh "$PANEL_INSTALL_URL" && bash install.sh
+
+  if [[ $? -ne 0 ]]; then
+    echo "$PANEL_NAME 安装失败，请检查安装链接或网络连接！"
+    exit 1
+  fi
+
+  echo "安装成功！即将切换面板语言为简体中文..."
+  echo "======================================"
+
+  # 切换语言到简体中文
+  if [[ -f "$LANGUAGE_CONFIG_PATH" ]]; then
+    if [[ "$PANEL_CHOICE" -eq 2 ]]; then
+      sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+    elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+      sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
+    fi
+    echo "面板语言文件已修改为中文！"
+  else
+    echo "语言配置文件未找到，可能需要手动设置。"
+  fi
+
+  # 重启面板以应用设置
+  if [[ "$PANEL_CHOICE" -eq 2 ]]; then
+    systemctl restart orris-panel
+  elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+    systemctl restart flux-panel
+  fi
+
+  echo "======================================"
+  echo "🎉 $PANEL_NAME 面板安装完成！"
+  echo "🎉 并设置为中文！"
+  echo "======================================"
+}
+
+# 根据用户选择执行
+case "$PANEL_CHOICE" in
+  1)
+    install_docker
+    ;;
+  2|3)
+    install_panel
+    ;;
+  *)
+    echo "无效选择，请重新运行脚本。"
+    exit 1
+    ;;
+esac
