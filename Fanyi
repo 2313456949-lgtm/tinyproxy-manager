@@ -10,62 +10,67 @@ echo "====================================="
 echo " 🌟 自动检测并翻译语言设置脚本 🌟"
 echo "====================================="
 
-# 用户定义语言配置文件路径
-read -p "请输入需要修改的语言文件路径（例如 /etc/app/settings.conf 或 /www/server/panel/config.json）： " LANGUAGE_CONFIG_PATH
+# 定义需要遍历的常见路径
+SEARCH_PATHS=(
+  "/etc"
+  "/www"
+  "/opt"
+)
 
-# 检查文件是否存在
-if [[ ! -f "$LANGUAGE_CONFIG_PATH" ]]; then
-  echo "❌ 配置文件未找到，请检查路径是否正确！"
-  exit 1
-fi
+# 支持的文件类型及对应的处理规则
+FILE_EXTENSIONS=("*.json" "*.yaml" "*.yml" "*.conf" "*.ini")
 
-echo "检测到配置文件 $LANGUAGE_CONFIG_PATH，正在检查需要翻译的内容..."
+# 遍历并检测需要翻译的文件
+for PATH in "${SEARCH_PATHS[@]}"; do
+  echo "🔍 正在扫描路径：$PATH"
 
-# 自动检测需要翻译的字段并处理
-if [[ "$LANGUAGE_CONFIG_PATH" == *.json ]]; then
-  # JSON 文件格式处理
-  DETECTION=$(grep '"language": "en"' "$LANGUAGE_CONFIG_PATH")
-  if [[ $DETECTION != "" ]]; then
-    sed -i 's/"language": "en"/"language": "zh_CN"/g' "$LANGUAGE_CONFIG_PATH"
-    echo "✅ 检测到字段并完成翻译（JSON）。"
-  else
-    echo "⚠️ 未检测到需要翻译的字段（JSON）。"
-  fi
+  for EXT in "${FILE_EXTENSIONS[@]}"; do
+    # 查找文件
+    FILES=$(find "$PATH" -type f -name "$EXT" 2>/dev/null)
 
-elif [[ "$LANGUAGE_CONFIG_PATH" == *.yaml || "$LANGUAGE_CONFIG_PATH" == *.yml ]]; then
-  # YAML 文件格式处理
-  DETECTION=$(grep 'language: en' "$LANGUAGE_CONFIG_PATH")
-  if [[ $DETECTION != "" ]]; then
-    sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-    echo "✅ 检测到字段并完成翻译（YAML）。"
-  else
-    echo "⚠️ 未检测到需要翻译的字段（YAML）。"
-  fi
+    for FILE in $FILES; do
+      echo "⚙️ 检测到文件：$FILE"
+      
+      if [[ "$FILE" == *.json ]]; then
+        # JSON 文件处理
+        DETECTION=$(grep '"language": "en"' "$FILE")
+        if [[ $DETECTION != "" ]]; then
+          sed -i 's/"language": "en"/"language": "zh_CN"/g' "$FILE"
+          echo "✅ 翻译完成（JSON）：$FILE"
+        fi
 
-elif [[ "$LANGUAGE_CONFIG_PATH" == *.conf || "$LANGUAGE_CONFIG_PATH" == *.ini ]]; then
-  # INI/CONF 文件格式处理
-  DETECTION=$(grep 'lang=en' "$LANGUAGE_CONFIG_PATH")
-  if [[ $DETECTION != "" ]]; then
-    sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-    echo "✅ 检测到字段并完成翻译（CONF/INI）。"
-  else
-    echo "⚠️ 未检测到需要翻译的字段（CONF/INI）。"
-  fi
+      elif [[ "$FILE" == *.yaml || "$FILE" == *.yml ]]; then
+        # YAML 文件处理
+        DETECTION=$(grep 'language: en' "$FILE")
+        if [[ $DETECTION != "" ]]; then
+          sed -i 's/language: en/language: zh_CN/g' "$FILE"
+          echo "✅ 翻译完成（YAML）：$FILE"
+        fi
 
-else
-  echo "⚠️ 不支持的配置文件格式，请手动确认文件内容！"
-  exit 1
-fi
+      elif [[ "$FILE" == *.conf || "$FILE" == *.ini ]]; then
+        # CONF/INI 文件处理
+        DETECTION=$(grep 'lang=en' "$FILE")
+        if [[ $DETECTION != "" ]]; then
+          sed -i 's/lang=en/lang=zh_CN/g' "$FILE"
+          echo "✅ 翻译完成（CONF/INI）：$FILE"
+        fi
+
+      else
+        echo "⚠️ 不支持的文件格式：$FILE"
+      fi
+    done
+  done
+done
 
 # 提示用户是否重启服务
 read -p "请输入需要重启的服务名（例如 nginx 或 apache2，若不需要重启直接按回车）： " SERVICE_NAME
 if [[ -n "$SERVICE_NAME" ]]; then
   systemctl restart "$SERVICE_NAME"
-  echo "服务 $SERVICE_NAME 已重启以应用新配置。"
+  echo "🎉 服务 $SERVICE_NAME 已重启以应用新配置。"
 else
-  echo "跳过服务重启。"
+  echo "🎉 翻译完成，未重启服务！"
 fi
 
 echo "====================================="
-echo "🎉 自动检测与翻译完成！"
+echo "🎉 自动检测与翻译已全部完成！"
 echo "====================================="
