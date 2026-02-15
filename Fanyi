@@ -10,25 +10,27 @@ echo "======================================"
 echo " 🌟 VPS 面板安装脚本 🌟"
 echo "======================================"
 echo "支持以下面板安装："
-echo "1. 哆啦A梦面板 (Doraemon Panel)"
-echo "2. Orris 面板 (Orris Panel)"
-echo "3. Flux 面板 (Flux Panel)"
+echo "1. Orris 面板 (Orris Panel)"
+echo "2. Flux 面板 (Flux Panel)"
 echo "======================================"
 
-# 用户选择面板
-read -p "请输入您想安装的面板序号 [1-3]: " PANEL_CHOICE
+# 检查是否传入 $do 参数自动选择面板
+if [[ -z "$do" ]]; then
+  # 无 $do 参数输入则用户手动选择
+  read -p "请输入您想安装的面板序号 [1-2]: " PANEL_CHOICE
+else
+  # 若 $do 参数非空，则按 $do 值自动选择面板
+  echo "检测到环境变量 do，值为: $do"
+  PANEL_CHOICE="$do"
+fi
 
+# 设置面板信息
 if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-  PANEL_NAME="哆啦A梦"
-  PANEL_INSTALL_URL="https://doraemon.example.com/install.sh"  # 替换为真实哆啦A梦安装链接
-  LANGUAGE_CONFIG_PATH="/etc/doraemon/config.json"
-
-elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
   PANEL_NAME="Orris"
-  PANEL_INSTALL_URL="https://orris.example.com/install.sh"    # 替换为真实 Oris 安装链接
+  PANEL_INSTALL_URL="https://orris.example.com/install.sh"    # 替换为真实 Oris 面板安装链接
   LANGUAGE_CONFIG_PATH="/etc/orris/settings.conf"
 
-elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
   PANEL_NAME="Flux"
   PANEL_INSTALL_URL="https://flux.example.com/install.sh"     # 替换为真实 Flux 面板安装链接
   LANGUAGE_CONFIG_PATH="/etc/flux/config.yaml"
@@ -57,10 +59,8 @@ echo "======================================"
 # 切换语言到简体中文
 if [[ -f "$LANGUAGE_CONFIG_PATH" ]]; then
   if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-    sed -i 's/"language": "en"/"language": "zh_CN"/g' "$LANGUAGE_CONFIG_PATH"
-  elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
     sed -i 's/lang=en/lang=zh_CN/g' "$LANGUAGE_CONFIG_PATH"
-  elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+  elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
     sed -i 's/language: en/language: zh_CN/g' "$LANGUAGE_CONFIG_PATH"
   fi
   echo "面板语言文件已修改为中文！"
@@ -70,10 +70,8 @@ fi
 
 # 重启面板以应用设置
 if [[ "$PANEL_CHOICE" -eq 1 ]]; then
-  systemctl restart doraemon-panel
-elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
   systemctl restart orris-panel
-elif [[ "$PANEL_CHOICE" -eq 3 ]]; then
+elif [[ "$PANEL_CHOICE" -eq 2 ]]; then
   systemctl restart flux-panel
 fi
 
