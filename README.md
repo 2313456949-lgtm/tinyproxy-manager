@@ -28,3 +28,7 @@ wget https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Sh
 ```bash
 wget -O nftmgr https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/nftables && chmod +x nftmgr && ./nftmgr
 ```
+### 6. 一键申请SSL证书
+```bash
+curl -sL https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/SSL -o tinyproxy_ssl.sh && chmod +x tinyproxy_ssl.sh && ./tinyproxy_ssl.sh
+```
