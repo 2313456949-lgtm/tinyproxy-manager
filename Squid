@@ -11,7 +11,7 @@ BLUE='\033[34m'
 PLAIN='\033[0m'
 
 CONF_FILE="/etc/squid/squid.conf"
-SCRIPT_PATH=$(readlink -f "$0")
+SCRIPT_URL="https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Squid"
 
 # 获取服务器公网IPv4（禁用IPv6）
 get_public_ip() {
@@ -41,6 +41,18 @@ check_sys() {
     [[ "$RELEASE" == "unknown" ]] && echo -e "${RED}无法识别系统类型！${PLAIN}" && exit 1
 }
 
+# 安装快捷命令
+install_shortcut() {
+    echo -e "${YELLOW}正在安装快捷命令...${PLAIN}"
+    curl -sL "$SCRIPT_URL" -o /usr/local/bin/Squid
+    chmod +x /usr/local/bin/Squid
+    if [[ -f /usr/local/bin/Squid && -s /usr/local/bin/Squid ]]; then
+        echo -e "${GREEN}快捷命令安装成功！以后可以直接输入 'Squid' 来管理${PLAIN}"
+    else
+        echo -e "${YELLOW}快捷命令安装失败，但不影响使用${PLAIN}"
+    fi
+}
+
 # 安装
 install_squid() {
     echo -e "${GREEN}正在安装 Squid...${PLAIN}"
@@ -58,9 +70,8 @@ install_squid() {
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Squid 安装成功！${PLAIN}"
         
-        cp "$SCRIPT_PATH" /usr/local/bin/Squid 2>/dev/null
-        chmod +x /usr/local/bin/Squid 2>/dev/null
-        echo -e "${YELLOW}提示: 以后可以直接输入 'Squid' 命令来管理${PLAIN}"
+        # 安装快捷命令（从网络下载）
+        install_shortcut
         
         # 备份原配置
         [[ -f $CONF_FILE ]] && cp $CONF_FILE ${CONF_FILE}.bak.$(date +%s)
@@ -108,9 +119,9 @@ configure_squid() {
     # 客户端IP（手动输入）
     echo -e ""
     read -p "请输入允许连接的客户端IP: " client_ip
-    while [[ -z "$client_ip" || ! "$client_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; do
+    while [[ -z "$client_ip" || ! "$client_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; do
         echo -e "${RED}客户端IP不能为空且格式需正确！${PLAIN}"
-        read -p "请输入客户端IP (如 192.168.1.100): " client_ip
+        read -p "请输入客户端IP (如 192.168.1.100 或 192.168.1.0/24): " client_ip
     done
     
     # 生成配置文件
@@ -227,9 +238,6 @@ pconn_timeout 60 seconds
 # 性能优化
 # ==================================================
 
-# 最大连接数
-max_filedescriptors 65535
-
 # DNS缓存
 dns_nameservers 8.8.8.8 8.8.4.4
 positive_dns_ttl 6 hours
@@ -238,18 +246,24 @@ EOF
 
     echo -e "${GREEN}配置文件已生成${PLAIN}"
 
+    # 创建缓存目录
+    mkdir -p /var/spool/squid
+    mkdir -p /var/log/squid
+    chown -R squid:squid /var/spool/squid 2>/dev/null || chown -R proxy:proxy /var/spool/squid 2>/dev/null
+    chown -R squid:squid /var/log/squid 2>/dev/null || chown -R proxy:proxy /var/log/squid 2>/dev/null
+
     # 初始化缓存目录
     echo -e "${YELLOW}正在初始化缓存目录...${PLAIN}"
     squid -z 2>/dev/null
-    sleep 2
+    sleep 3
 
     echo -e ""
-    echo -e "${YELLOW}正在重启服务...${PLAIN}"
+    echo -e "${YELLOW}正在启动服务...${PLAIN}"
     systemctl stop squid 2>/dev/null
     sleep 2
     systemctl start squid
     
-    sleep 2
+    sleep 3
     if systemctl is-active --quiet squid; then
         echo -e "${GREEN}========== 配置完成 ==========${PLAIN}"
         echo -e ""
@@ -263,6 +277,9 @@ EOF
     else
         echo -e "${RED}服务启动失败！错误信息：${PLAIN}"
         journalctl -u squid -n 15 --no-pager
+        echo -e ""
+        echo -e "${YELLOW}尝试检查配置文件...${PLAIN}"
+        squid -k parse
         echo -e ""
         echo -e "${YELLOW}常见问题：${PLAIN}"
         echo -e "1. 端口被占用，请更换端口"
@@ -332,7 +349,7 @@ restart_service() {
 show_status() {
     echo -e ""
     if systemctl is-active --quiet squid; then
-        local port=$(grep "^http_port" $CONF_FILE | awk '{print $2}')
+        local port=$(grep "^http_port" $CONF_FILE 2>/dev/null | awk '{print $2}')
         local server_ip=$(get_public_ip)
         echo -e "${GREEN}Squid 状态: [运行中]${PLAIN}"
         echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
@@ -347,7 +364,7 @@ show_status() {
         fi
         echo -e ""
         echo -e "${BLUE}【当前白名单IP】${PLAIN}"
-        grep "^acl whitelist src\|^acl client_" $CONF_FILE | awk '{print $4}'
+        grep "^acl whitelist src\|^acl client_" $CONF_FILE 2>/dev/null | awk '{print $4}'
     else
         echo -e "${RED}Squid 状态: [未运行]${PLAIN}"
     fi
@@ -363,7 +380,7 @@ view_whitelist() {
         local ip=$(echo "$line" | awk '{print $4}')
         echo -e " ${GREEN}$count.${PLAIN} $ip"
         ((count++))
-    done < <(grep "^acl whitelist src\|^acl client_" $CONF_FILE)
+    done < <(grep "^acl whitelist src\|^acl client_" $CONF_FILE 2>/dev/null)
     echo -e ""
     echo -e "${BLUE}==================================${PLAIN}"
 }
@@ -382,7 +399,7 @@ add_ip() {
         # 生成唯一的ACL名称
         local acl_name="client_$(echo $new_ip | tr './' '__')"
         
-        if grep -q "src $new_ip" $CONF_FILE; then
+        if grep -q "src $new_ip" $CONF_FILE 2>/dev/null; then
             echo -e "${YELLOW}此IP已存在白名单中！${PLAIN}"
         else
             # 在 http_access deny all 之前添加
@@ -407,7 +424,7 @@ del_ip() {
         return
     fi
     
-    if grep -q "src $del_ip" $CONF_FILE; then
+    if grep -q "src $del_ip" $CONF_FILE 2>/dev/null; then
         # 删除相关的ACL和http_access行
         local acl_name=$(grep "src $del_ip" $CONF_FILE | awk '{print $2}')
         sed -i "/acl $acl_name src/d" $CONF_FILE
@@ -422,7 +439,7 @@ del_ip() {
 
 # 改端口
 modify_port() {
-    local cur=$(grep "^http_port" $CONF_FILE | awk '{print $2}')
+    local cur=$(grep "^http_port" $CONF_FILE 2>/dev/null | awk '{print $2}')
     echo -e "当前端口: ${YELLOW}$cur${PLAIN}"
     read -p "请输入新端口: " new_port
     if [[ -n "$new_port" && "$new_port" =~ ^[0-9]+$ ]]; then
