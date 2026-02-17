@@ -53,7 +53,7 @@ install_shortcut() {
     fi
 }
 
-# 验证IP格式（支持单IP和IP段/32格式）
+# 验证IP格式（支持单IP和IP段格式）
 validate_ip() {
     local ip="$1"
     # 支持格式: 192.168.1.100 或 192.168.1.0/24
@@ -61,6 +61,18 @@ validate_ip() {
         return 0
     else
         return 1
+    fi
+}
+
+# 格式化IP（单个IP自动添加/32）
+format_ip() {
+    local ip="$1"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        # 单个IP，添加/32
+        echo "${ip}/32"
+    else
+        # 已有掩码，直接返回
+        echo "$ip"
     fi
 }
 
@@ -137,7 +149,7 @@ configure_proxy() {
     # 客户端IP（手动输入，支持IP段）
     echo -e ""
     echo -e "${BLUE}支持格式:${PLAIN}"
-    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN} (将自动转换为 192.168.1.100/32)"
     echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
     echo -e ""
     read -p "请输入允许连接的客户端IP: " client_ip
@@ -145,6 +157,9 @@ configure_proxy() {
         echo -e "${RED}客户端IP不能为空且格式需正确！${PLAIN}"
         read -p "请输入客户端IP (如 192.168.1.100 或 192.168.1.0/24): " client_ip
     done
+    
+    # 格式化IP（添加/32）
+    client_ip=$(format_ip "$client_ip")
     
     sed -i '/^Allow /d' $CONF_FILE
     echo "Allow $client_ip" >> $CONF_FILE
@@ -277,12 +292,15 @@ add_ip() {
     echo -e ""
     echo -e "${BLUE}【添加IP到白名单】${PLAIN}"
     echo -e "支持格式:"
-    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN} (将自动转换为 192.168.1.100/32)"
     echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
     echo -e ""
     read -p "请输入要添加的客户端IP: " new_ip
     
     if validate_ip "$new_ip"; then
+        # 格式化IP（添加/32）
+        new_ip=$(format_ip "$new_ip")
+        
         if grep -q "^Allow $new_ip" $CONF_FILE 2>/dev/null; then
             echo -e "${YELLOW}此IP已存在白名单中！${PLAIN}"
         else
@@ -300,15 +318,18 @@ del_ip() {
     echo -e ""
     view_whitelist
     echo -e ""
-    read -p "请输入要删除的IP: " del_ip
+    read -p "请输入要删除的IP (包含掩码，如 192.168.1.100/32): " del_ip
     
     if [[ -z "$del_ip" ]]; then
         echo -e "${RED}IP不能为空！${PLAIN}"
         return
     fi
     
+    # 转义斜杠用于sed
+    local escaped_ip=$(echo "$del_ip" | sed 's/\//\\\//g')
+    
     if grep -q "^Allow $del_ip" $CONF_FILE 2>/dev/null; then
-        sed -i "/^Allow $del_ip$/d" $CONF_FILE
+        sed -i "/^Allow $escaped_ip$/d" $CONF_FILE
         echo -e "${GREEN}已从白名单删除IP: $del_ip${PLAIN}"
         restart_service
     else
@@ -336,12 +357,15 @@ modify_client_ip() {
     view_whitelist
     echo -e ""
     echo -e "${BLUE}支持格式:${PLAIN}"
-    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN} (将自动转换为 192.168.1.100/32)"
     echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
     echo -e ""
     read -p "请输入新客户端IP (将替换所有现有IP): " new_ip
     
     if validate_ip "$new_ip"; then
+        # 格式化IP（添加/32）
+        new_ip=$(format_ip "$new_ip")
+        
         sed -i '/^Allow /d' $CONF_FILE
         echo "Allow $new_ip" >> $CONF_FILE
         echo -e "${GREEN}客户端IP已修改: $new_ip${PLAIN}"
