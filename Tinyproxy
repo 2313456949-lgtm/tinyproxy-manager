@@ -11,7 +11,7 @@ BLUE='\033[34m'
 PLAIN='\033[0m'
 
 CONF_FILE="/etc/tinyproxy/tinyproxy.conf"
-SCRIPT_PATH=$(readlink -f "$0")
+SCRIPT_URL="https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/Tinyproxy"
 
 # 获取服务器公网IPv4（禁用IPv6）
 get_public_ip() {
@@ -41,6 +41,29 @@ check_sys() {
     [[ "$RELEASE" == "unknown" ]] && echo -e "${RED}无法识别系统类型！${PLAIN}" && exit 1
 }
 
+# 安装快捷命令（从网络下载）
+install_shortcut() {
+    echo -e "${YELLOW}正在安装快捷命令...${PLAIN}"
+    curl -sL "$SCRIPT_URL" -o /usr/local/bin/Tinyproxy
+    chmod +x /usr/local/bin/Tinyproxy
+    if [[ -f /usr/local/bin/Tinyproxy && -s /usr/local/bin/Tinyproxy ]]; then
+        echo -e "${GREEN}快捷命令安装成功！以后可以直接输入 'Tinyproxy' 来管理${PLAIN}"
+    else
+        echo -e "${YELLOW}快捷命令安装失败，但不影响使用${PLAIN}"
+    fi
+}
+
+# 验证IP格式（支持单IP和IP段/32格式）
+validate_ip() {
+    local ip="$1"
+    # 支持格式: 192.168.1.100 或 192.168.1.0/24
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 安装
 install_tinyproxy() {
     echo -e "${GREEN}正在安装 Tinyproxy...${PLAIN}"
@@ -60,9 +83,8 @@ install_tinyproxy() {
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Tinyproxy 安装成功！${PLAIN}"
         
-        cp "$SCRIPT_PATH" /usr/local/bin/Tinyproxy 2>/dev/null
-        chmod +x /usr/local/bin/Tinyproxy 2>/dev/null
-        echo -e "${YELLOW}提示: 以后可以直接输入 'Tinyproxy' 命令来管理${PLAIN}"
+        # 安装快捷命令（从网络下载）
+        install_shortcut
         
         [[ -f $CONF_FILE ]] && cp $CONF_FILE ${CONF_FILE}.bak.$(date +%s)
         sed -i 's/^Allow /#Allow /g' $CONF_FILE
@@ -112,12 +134,16 @@ configure_proxy() {
     fi
     echo -e "${GREEN}服务器IP已设置: $server_ip${PLAIN}"
     
-    # 客户端IP（手动输入）
+    # 客户端IP（手动输入，支持IP段）
+    echo -e ""
+    echo -e "${BLUE}支持格式:${PLAIN}"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
     echo -e ""
     read -p "请输入允许连接的客户端IP: " client_ip
-    while [[ -z "$client_ip" || ! "$client_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; do
+    while [[ -z "$client_ip" ]] || ! validate_ip "$client_ip"; do
         echo -e "${RED}客户端IP不能为空且格式需正确！${PLAIN}"
-        read -p "请输入客户端IP (如 192.168.1.100): " client_ip
+        read -p "请输入客户端IP (如 192.168.1.100 或 192.168.1.0/24): " client_ip
     done
     
     sed -i '/^Allow /d' $CONF_FILE
@@ -210,25 +236,54 @@ restart_service() {
 show_status() {
     echo -e ""
     if systemctl is-active --quiet tinyproxy; then
-        local port=$(grep "^Port " $CONF_FILE | awk '{print $2}')
-        local client_ip=$(grep "^Allow " $CONF_FILE | head -1 | awk '{print $2}')
+        local port=$(grep "^Port " $CONF_FILE 2>/dev/null | awk '{print $2}')
         local server_ip=$(get_public_ip)
         echo -e "${GREEN}Tinyproxy 状态: [运行中]${PLAIN}"
         echo -e "服务器地址: ${YELLOW}$server_ip${PLAIN}"
         echo -e "监听端口: ${YELLOW}$port${PLAIN}"
-        echo -e "客户端IP: ${YELLOW}$client_ip${PLAIN}"
         echo -e "代理地址: ${GREEN}http://$server_ip:$port${PLAIN}"
+        echo -e ""
+        echo -e "${BLUE}【开机自启状态】${PLAIN}"
+        if systemctl is-enabled --quiet tinyproxy; then
+            echo -e "开机自启: ${GREEN}已启用${PLAIN}"
+        else
+            echo -e "开机自启: ${RED}未启用${PLAIN}"
+        fi
+        echo -e ""
+        echo -e "${BLUE}【当前白名单IP】${PLAIN}"
+        grep "^Allow " $CONF_FILE 2>/dev/null | awk '{print $2}'
     else
         echo -e "${RED}Tinyproxy 状态: [未运行]${PLAIN}"
     fi
 }
 
+# 查看白名单
+view_whitelist() {
+    echo -e ""
+    echo -e "${BLUE}========== IP白名单列表 ==========${PLAIN}"
+    echo -e ""
+    local count=1
+    while read line; do
+        local ip=$(echo "$line" | awk '{print $2}')
+        echo -e " ${GREEN}$count.${PLAIN} $ip"
+        ((count++))
+    done < <(grep "^Allow " $CONF_FILE 2>/dev/null)
+    echo -e ""
+    echo -e "${BLUE}==================================${PLAIN}"
+}
+
 # 添加IP
 add_ip() {
     echo -e ""
+    echo -e "${BLUE}【添加IP到白名单】${PLAIN}"
+    echo -e "支持格式:"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
+    echo -e ""
     read -p "请输入要添加的客户端IP: " new_ip
-    if [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        if grep -q "^Allow $new_ip" $CONF_FILE; then
+    
+    if validate_ip "$new_ip"; then
+        if grep -q "^Allow $new_ip" $CONF_FILE 2>/dev/null; then
             echo -e "${YELLOW}此IP已存在白名单中！${PLAIN}"
         else
             echo "Allow $new_ip" >> $CONF_FILE
@@ -240,9 +295,30 @@ add_ip() {
     fi
 }
 
+# 删除白名单IP
+del_ip() {
+    echo -e ""
+    view_whitelist
+    echo -e ""
+    read -p "请输入要删除的IP: " del_ip
+    
+    if [[ -z "$del_ip" ]]; then
+        echo -e "${RED}IP不能为空！${PLAIN}"
+        return
+    fi
+    
+    if grep -q "^Allow $del_ip" $CONF_FILE 2>/dev/null; then
+        sed -i "/^Allow $del_ip$/d" $CONF_FILE
+        echo -e "${GREEN}已从白名单删除IP: $del_ip${PLAIN}"
+        restart_service
+    else
+        echo -e "${RED}此IP不在白名单中！${PLAIN}"
+    fi
+}
+
 # 改端口
 modify_port() {
-    local cur=$(grep "^Port " $CONF_FILE | awk '{print $2}')
+    local cur=$(grep "^Port " $CONF_FILE 2>/dev/null | awk '{print $2}')
     echo -e "当前端口: ${YELLOW}$cur${PLAIN}"
     read -p "请输入新端口: " new_port
     if [[ -n "$new_port" && "$new_port" =~ ^[0-9]+$ ]]; then
@@ -256,10 +332,16 @@ modify_port() {
 
 # 改客户端IP
 modify_client_ip() {
-    local cur=$(grep "^Allow " $CONF_FILE | head -1 | awk '{print $2}')
-    echo -e "当前客户端IP: ${YELLOW}$cur${PLAIN}"
-    read -p "请输入新客户端IP: " new_ip
-    if [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e ""
+    view_whitelist
+    echo -e ""
+    echo -e "${BLUE}支持格式:${PLAIN}"
+    echo -e "  单个IP: ${GREEN}192.168.1.100${PLAIN}"
+    echo -e "  IP段:   ${GREEN}192.168.1.0/24${PLAIN}"
+    echo -e ""
+    read -p "请输入新客户端IP (将替换所有现有IP): " new_ip
+    
+    if validate_ip "$new_ip"; then
         sed -i '/^Allow /d' $CONF_FILE
         echo "Allow $new_ip" >> $CONF_FILE
         echo -e "${GREEN}客户端IP已修改: $new_ip${PLAIN}"
@@ -267,6 +349,75 @@ modify_client_ip() {
     else
         echo -e "${RED}IP格式错误！${PLAIN}"
     fi
+}
+
+# 开机自启管理
+manage_autostart() {
+    echo -e ""
+    echo -e "${BLUE}========== 开机自启管理 ==========${PLAIN}"
+    if systemctl is-enabled --quiet tinyproxy; then
+        echo -e "当前状态: ${GREEN}已启用${PLAIN}"
+    else
+        echo -e "当前状态: ${RED}未启用${PLAIN}"
+    fi
+    echo -e ""
+    echo -e " 1. 启用开机自启"
+    echo -e " 2. 禁用开机自启"
+    echo -e " 0. 返回"
+    echo -e ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            systemctl enable tinyproxy
+            echo -e "${GREEN}已启用开机自启${PLAIN}"
+            ;;
+        2)
+            systemctl disable tinyproxy
+            echo -e "${GREEN}已禁用开机自启${PLAIN}"
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}输入错误${PLAIN}"
+            ;;
+    esac
+}
+
+# 访问控制管理
+access_control() {
+    echo -e ""
+    echo -e "${BLUE}========== 访问控制管理 ==========${PLAIN}"
+    echo -e ""
+    echo -e " 1. 查看白名单"
+    echo -e " 2. 添加IP到白名单"
+    echo -e " 3. 删除白名单IP"
+    echo -e " 4. 修改白名单IP (替换所有)"
+    echo -e " 0. 返回"
+    echo -e ""
+    read -p "请选择: " choice
+    
+    case $choice in
+        1)
+            view_whitelist
+            ;;
+        2)
+            add_ip
+            ;;
+        3)
+            del_ip
+            ;;
+        4)
+            modify_client_ip
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}输入错误${PLAIN}"
+            ;;
+    esac
 }
 
 # 查看日志
@@ -394,9 +545,9 @@ menu() {
     echo -e " 5. 重启服务"
     echo -e " 6. 查看状态"
     echo -e "${GREEN}----------------------------------${PLAIN}"
-    echo -e " 7. 添加客户端IP"
+    echo -e " 7. 访问控制 (IP白名单)"
     echo -e " 8. 修改端口"
-    echo -e " 9. 修改客户端IP"
+    echo -e " 9. 开机自启管理"
     echo -e "10. 查看日志"
     echo -e "11. 使用说明"
     echo -e " 0. 退出"
@@ -410,9 +561,9 @@ menu() {
         4) stop_service ;;
         5) restart_service ;;
         6) show_status ;;
-        7) add_ip ;;
+        7) access_control ;;
         8) modify_port ;;
-        9) modify_client_ip ;;
+        9) manage_autostart ;;
         10) view_logs ;;
         11) show_usage ;;
         0) echo -e "${GREEN}退出脚本${PLAIN}"; exit 0 ;;
