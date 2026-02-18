@@ -32,3 +32,7 @@ wget -O nftmgr https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manag
 ```bash
 curl -sL https://raw.githubusercontent.com/2313456949-lgtm/tinyproxy-manager/main/SSL -o tinyproxy_ssl.sh && chmod +x tinyproxy_ssl.sh && ./tinyproxy_ssl.sh
 ```
+### 7. 一键安装脚本命令
+```bash
+apt update -y && apt install -y curl && apt install -y socat
+```
