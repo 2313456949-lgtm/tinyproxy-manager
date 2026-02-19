@@ -1,0 +1,30 @@
+根据 Orris 的 Docker Compose 架构，节点端查看日志的常用命令：
+
+# 查看所有服务日志
+docker compose logs -f
+
+# 只看后端服务日志
+docker compose logs -f orris
+
+# 查看最近 100 行
+docker compose logs --tail 100 orris
+
+# 查看指定时间段
+docker compose logs --since 30m orris
+
+如果节点端是独立部署的（非 Docker），可以检查：
+
+#重启orris
+rc-service orrisp restart
+
+# 查看 orris 进程状态
+systemctl status orris
+
+# 查看 systemd 日志
+journalctl -u orris -f --no-pager
+
+# 或直接查日志文件（路径取决于配置）
+tail -f /var/log/orris/*.log
+
+#升级下载系统指令
+docker compose pull
