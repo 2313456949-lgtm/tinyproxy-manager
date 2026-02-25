@@ -1,0 +1,923 @@
+#!/bin/bash
+
+# ============================================
+# 节点流量监控探针 - 一键安装脚本
+# 功能：服务���资源监控 + 流量统计 + 连接追踪
+# 作者：自动生成脚本
+# ============================================
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 配置参数
+INSTALL_DIR="/opt/node_monitor"
+SERVICE_NAME="node_monitor"
+WEB_PORT=5000
+MONTHLY_LIMIT_GB=1000
+
+# 打印横幅
+print_banner() {
+    echo -e "${BLUE}"
+    echo "=================================================================="
+    echo "              节点流量监控探针 - 自动安装程序"
+    echo "=================================================================="
+    echo -e "${NC}"
+    echo -e "${GREEN}功能特性：${NC}"
+    echo "  📊 实时 CPU/内存监控"
+    echo "  📈 月度流量统计 (${MONTHLY_LIMIT_GB}GB 额度)"
+    echo "  🌐 活跃连接 IP 追踪"
+    echo "  🎨 响应式 Web 面板"
+    echo "  🚀 系统服务自启动"
+    echo ""
+}
+
+# 检查权限
+check_privileges() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}错误：此脚本需要 root 权限运行${NC}"
+        echo "请使用: sudo $0"
+        exit 1
+    fi
+}
+
+# 检测系统
+detect_system() {
+    if [[ -f /etc/debian_version ]]; then
+        PKG_MANAGER="apt"
+        UPDATE_CMD="apt update"
+        INSTALL_CMD="apt install -y"
+    elif [[ -f /etc/redhat-release ]]; then
+        PKG_MANAGER="yum"
+        UPDATE_CMD="yum update -y"
+        INSTALL_CMD="yum install -y"
+    else
+        echo -e "${YELLOW}警告：未识别的系统，尝试使用 apt${NC}"
+        PKG_MANAGER="apt"
+        UPDATE_CMD="apt update"
+        INSTALL_CMD="apt install -y"
+    fi
+}
+
+# 安装系统依赖
+install_dependencies() {
+    echo -e "${YELLOW}[1/5] 更新系统并安装依赖包...${NC}"
+    
+    $UPDATE_CMD
+    
+    if [[ $PKG_MANAGER == "apt" ]]; then
+        $INSTALL_CMD python3 python3-pip python3-venv curl psmisc net-tools
+    else
+        $INSTALL_CMD python3 python3-pip curl psmisc net-tools
+    fi
+    
+    echo -e "${GREEN}✓ 系统依赖安装完成${NC}"
+}
+
+# 创建项目结构
+create_project() {
+    echo -e "${YELLOW}[2/5] 创建项目目录结构...${NC}"
+    
+    # 清理旧版本
+    if [[ -d "$INSTALL_DIR" ]]; then
+        echo -e "${YELLOW}发现旧版本，正在备份...${NC}"
+        mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
+    fi
+    
+    mkdir -p "$INSTALL_DIR/templates"
+    mkdir -p "$INSTALL_DIR/static"
+    cd "$INSTALL_DIR"
+    
+    echo -e "${GREEN}✓ 项目目录创建完成${NC}"
+}
+
+# 生成后端代码
+create_backend() {
+    echo -e "${YELLOW}[3/5] 生成后端监控程序...${NC}"
+    
+    cat <<'EOF' > app.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import json
+import time
+import subprocess
+from datetime import datetime
+from flask import Flask, render_template, jsonify
+import psutil
+
+app = Flask(__name__)
+
+# 全局配置
+CONFIG = {
+    'MONTHLY_LIMIT_GB': 1000,
+    'UPDATE_INTERVAL': 2,
+    'MAX_CONNECTIONS': 50
+}
+
+class SystemMonitor:
+    """系统监控核心类"""
+    
+    @staticmethod
+    def get_cpu_info():
+        """获取 CPU 信息"""
+        return {
+            'percent': round(psutil.cpu_percent(interval=1), 1),
+            'count': psutil.cpu_count(),
+            'freq': round(psutil.cpu_freq().current, 0) if psutil.cpu_freq() else 0
+        }
+    
+    @staticmethod
+    def get_memory_info():
+        """获取内存信息"""
+        memory = psutil.virtual_memory()
+        return {
+            'percent': round(memory.percent, 1),
+            'total': round(memory.total / (1024**3), 2),
+            'used': round(memory.used / (1024**3), 2),
+            'available': round(memory.available / (1024**3), 2)
+        }
+    
+    @staticmethod
+    def get_disk_info():
+        """获取磁盘信息"""
+        try:
+            disk = psutil.disk_usage('/')
+            return {
+                'percent': round(disk.percent, 1),
+                'total': round(disk.total / (1024**3), 2),
+                'used': round(disk.used / (1024**3), 2),
+                'free': round(disk.free / (1024**3), 2)
+            }
+        except:
+            return {'percent': 0, 'total': 0, 'used': 0, 'free': 0}
+
+class NetworkMonitor:
+    """网络监控类"""
+    
+    @staticmethod
+    def get_traffic_stats():
+        """获取网络流量统计"""
+        try:
+            net_io = psutil.net_io_counters()
+            sent_gb = net_io.bytes_sent / (1024**3)
+            recv_gb = net_io.bytes_recv / (1024**3)
+            total_used = sent_gb + recv_gb
+            
+            limit = CONFIG['MONTHLY_LIMIT_GB']
+            remaining = max(0, limit - total_used)
+            percent = min(100, (total_used / limit) * 100)
+            
+            return {
+                'sent': round(sent_gb, 3),
+                'received': round(recv_gb, 3),
+                'total_used': round(total_used, 3),
+                'remaining': round(remaining, 3),
+                'percent': round(percent, 1),
+                'limit': limit
+            }
+        except Exception as e:
+            print(f"流量统计错误: {e}")
+            return {'sent': 0, 'received': 0, 'total_used': 0, 'remaining': 0, 'percent': 0, 'limit': CONFIG['MONTHLY_LIMIT_GB']}
+    
+    @staticmethod
+    def get_active_connections():
+        """获取活跃网络连接"""
+        connections = {}
+        try:
+            # 使用 ss 命令获取连接信息
+            cmd = "ss -ntu state established | grep -v '127.0.0.1\\|::1' | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        count = int(parts[0])
+                        ip = parts[1]
+                        if ip and ip != '0.0.0.0' and not ip.startswith('127.'):
+                            connections[ip] = count
+            
+            # 限制显示数量
+            sorted_connections = sorted(connections.items(), key=lambda x: x[1], reverse=True)
+            return sorted_connections[:CONFIG['MAX_CONNECTIONS']]
+        
+        except Exception as e:
+            print(f"连接统计错误: {e}")
+            return []
+
+class SystemInfo:
+    """系统信息类"""
+    
+    @staticmethod
+    def get_system_info():
+        """获取系统基础信息"""
+        try:
+            uptime_cmd = subprocess.run(['uptime', '-p'], capture_output=True, text=True)
+            uptime = uptime_cmd.stdout.strip() if uptime_cmd.returncode == 0 else "未知"
+            
+            hostname = subprocess.run(['hostname'], capture_output=True, text=True)
+            hostname = hostname.stdout.strip() if hostname.returncode == 0 else "未知"
+            
+            return {
+                'hostname': hostname,
+                'uptime': uptime,
+                'platform': f"{psutil.platform.system()} {psutil.platform.release()}",
+                'boot_time': datetime.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S'),
+                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        except Exception as e:
+            print(f"系统信息获取错误: {e}")
+            return {
+                'hostname': '未知',
+                'uptime': '未知',
+                'platform': '未知',
+                'boot_time': '未知',
+                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+# Flask 路由
+@app.route('/')
+def index():
+    """主页面"""
+    return render_template('index.html')
+
+@app.route('/api/stats')
+def api_stats():
+    """API: 获取所有监控数据"""
+    try:
+        data = {
+            'system': SystemInfo.get_system_info(),
+            'cpu': SystemMonitor.get_cpu_info(),
+            'memory': SystemMonitor.get_memory_info(),
+            'disk': SystemMonitor.get_disk_info(),
+            'network': NetworkMonitor.get_traffic_stats(),
+            'connections': NetworkMonitor.get_active_connections(),
+            'timestamp': time.time()
+        }
+        return jsonify(data)
+    except Exception as e:
+        print(f"API 错误: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config')
+def api_config():
+    """API: 获取配置信息"""
+    return jsonify(CONFIG)
+
+if __name__ == '__main__':
+    print("🚀 节点监控探针启动中...")
+    print(f"📊 Web 面板地址: http://0.0.0.0:5000")
+    print(f"🔄 数据更新间隔: {CONFIG['UPDATE_INTERVAL']} 秒")
+    print(f"📈 月流量限制: {CONFIG['MONTHLY_LIMIT_GB']} GB")
+    app.run(host='0.0.0.0', port=5000, debug=False)
+EOF
+
+    chmod +x app.py
+    echo -e "${GREEN}✓ 后端代码生成完成${NC}"
+}
+
+# 生成前端代码
+create_frontend() {
+    echo -e "${YELLOW}[4/5] 生成前端监控面板...${NC}"
+    
+    cat <<'EOF' > templates/index.html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>节点监控探针</title>
+    <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 2.2em;
+        }
+        
+        .status-bar {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 15px;
+        }
+        
+        .status-item {
+            padding: 8px 15px;
+            background: #f8f9fa;
+            border-radius: 20px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .card h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            font-size: 1.3em;
+        }
+        
+        .card h3 i {
+            margin-right: 10px;
+            font-size: 1.1em;
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+        
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+        
+        .progress-bar {
+            background: #ecf0f1;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.8s ease, background-color 0.3s ease;
+            position: relative;
+        }
+        
+        .progress-fill.low { background: linear-gradient(90deg, #27ae60, #2ecc71); }
+        .progress-fill.medium { background: linear-gradient(90deg, #f39c12, #e67e22); }
+        .progress-fill.high { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        
+        .connections-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        .connections-table th {
+            background: #34495e;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 500;
+            border-radius: 8px 8px 0 0;
+        }
+        
+        .connections-table td {
+            padding: 12px;
+            border-bottom: 1px solid #ecf0f1;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .connections-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .badge {
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        
+        .no-data {
+            text-align: center;
+            color: #95a5a6;
+            font-style: italic;
+            padding: 20px;
+        }
+        
+        .traffic-warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .connections-card {
+            grid-column: 1 / -1;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-bar {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            body {
+                padding: 10px;
+            }
+        }
+        
+        .loading {
+            text-align: center;
+            color: #7f8c8d;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 头部信息 -->
+        <div class="header">
+            <h1><i class="fas fa-server"></i> 节点监控探针</h1>
+            <div class="status-bar">
+                <div class="status-item"><i class="fas fa-desktop"></i> <span id="hostname">加载中...</span></div>
+                <div class="status-item"><i class="fas fa-clock"></i> <span id="uptime">加载中...</span></div>
+                <div class="status-item"><i class="fas fa-calendar"></i> <span id="current-time">加载中...</span></div>
+            </div>
+        </div>
+        
+        <div class="dashboard-grid">
+            <!-- CPU 监控 -->
+            <div class="card">
+                <h3><i class="fas fa-microchip"></i> CPU 状态</h3>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="cpu-percent">0%</div>
+                        <div class="stat-label">使用率</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="cpu-cores">0</div>
+                        <div class="stat-label">核心数</div>
+                    </div>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>CPU 负载</span>
+                        <span id="cpu-percent-label">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="cpu-progress" class="progress-fill low" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 内存监控 -->
+            <div class="card">
+                <h3><i class="fas fa-memory"></i> 内存状态</h3>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="mem-used">0 GB</div>
+                        <div class="stat-label">已使用</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="mem-total">0 GB</div>
+                        <div class="stat-label">总容量</div>
+                    </div>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>内存使用率</span>
+                        <span id="mem-percent-label">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="mem-progress" class="progress-fill low" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 磁盘监控 -->
+            <div class="card">
+                <h3><i class="fas fa-hdd"></i> 磁盘状态</h3>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="disk-used">0 GB</div>
+                        <div class="stat-label">已使用</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="disk-total">0 GB</div>
+                        <div class="stat-label">总容量</div>
+                    </div>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>磁盘使用率</span>
+                        <span id="disk-percent-label">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="disk-progress" class="progress-fill low" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 流量监控 -->
+            <div class="card">
+                <h3><i class="fas fa-chart-line"></i> 流量统计</h3>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="traffic-used">0 GB</div>
+                        <div class="stat-label">已消耗</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="traffic-remaining">0 GB</div>
+                        <div class="stat-label">剩余额度</div>
+                    </div>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-label">
+                        <span>月度流量 (1TB 限额)</span>
+                        <span id="traffic-percent-label">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="traffic-progress" class="progress-fill low" style="width: 0%;"></div>
+                    </div>
+                </div>
+                <div id="traffic-warning" class="traffic-warning" style="display: none;">
+                    <strong>⚠️ 流量警告：</strong>月度流量使用已超过 80%，请注意控制使用量！
+                </div>
+            </div>
+        </div>
+        
+        <!-- 连接监控 -->
+        <div class="card connections-card">
+            <h3><i class="fas fa-network-wired"></i> 活跃连接监控</h3>
+            <table class="connections-table">
+                <thead>
+                    <tr>
+                        <th><i class="fas fa-globe"></i> 来源 IP 地址</th>
+                        <th><i class="fas fa-link"></i> 连接数量</th>
+                        <th><i class="fas fa-chart-bar"></i> 连接状态</th>
+                    </tr>
+                </thead>
+                <tbody id="connections-tbody">
+                    <tr><td colspan="3" class="loading">正在加载连接数据...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 监控数据管理
+        const Monitor = {
+            config: {
+                updateInterval: 2000,
+                maxRetries: 3
+            },
+            
+            retryCount: 0,
+            
+            // 更新进度条
+            updateProgress: function(elementId, percent, value) {
+                const progressBar = document.getElementById(elementId);
+                const label = document.getElementById(elementId.replace('-progress', '-percent-label'));
+                
+                if (progressBar && label) {
+                    progressBar.style.width = percent + '%';
+                    label.textContent = percent + '%';
+                    
+                    // 根据使用率设置颜色
+                    progressBar.className = 'progress-fill ';
+                    if (percent < 60) {
+                        progressBar.className += 'low';
+                    } else if (percent < 80) {
+                        progressBar.className += 'medium';
+                    } else {
+                        progressBar.className += 'high';
+                    }
+                }
+            },
+            
+            // 更新文本内容
+            updateText: function(elementId, text) {
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.textContent = text;
+                }
+            },
+            
+            // 更新连接表格
+            updateConnections: function(connections) {
+                const tbody = document.getElementById('connections-tbody');
+                if (!tbody) return;
+                
+                if (!connections || connections.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="no-data"><i class="fas fa-info-circle"></i> 当前无外部活跃连接</td></tr>';
+                    return;
+                }
+                
+                let html = '';
+                connections.forEach(([ip, count]) => {
+                    const statusClass = count > 10 ? 'high' : count > 5 ? 'medium' : 'low';
+                    const statusText = count > 10 ? '高频' : count > 5 ? '中等' : '正常';
+                    
+                    html += `
+                        <tr>
+                            <td><i class="fas fa-server"></i> ${ip}</td>
+                            <td><span class="badge">${count}</span></td>
+                            <td><span class="badge ${statusClass}">${statusText}</span></td>
+                        </tr>
+                    `;
+                });
+                
+                tbody.innerHTML = html;
+            },
+            
+            // 获取并更新数据
+            updateData: function() {
+                $.ajax({
+                    url: '/api/stats',
+                    method: 'GET',
+                    timeout: 10000,
+                    success: function(data) {
+                        Monitor.retryCount = 0;
+                        
+                        // 更新系统信息
+                        if (data.system) {
+                            Monitor.updateText('hostname', data.system.hostname);
+                            Monitor.updateText('uptime', data.system.uptime);
+                            Monitor.updateText('current-time', data.system.current_time);
+                        }
+                        
+                        // 更新 CPU
+                        if (data.cpu) {
+                            Monitor.updateText('cpu-percent', data.cpu.percent + '%');
+                            Monitor.updateText('cpu-cores', data.cpu.count);
+                            Monitor.updateProgress('cpu-progress', data.cpu.percent, data.cpu.percent);
+                        }
+                        
+                        // 更新内存
+                        if (data.memory) {
+                            Monitor.updateText('mem-used', data.memory.used + ' GB');
+                            Monitor.updateText('mem-total', data.memory.total + ' GB');
+                            Monitor.updateProgress('mem-progress', data.memory.percent, data.memory.percent);
+                        }
+                        
+                        // 更新磁盘
+                        if (data.disk) {
+                            Monitor.updateText('disk-used', data.disk.used + ' GB');
+                            Monitor.updateText('disk-total', data.disk.total + ' GB');
+                            Monitor.updateProgress('disk-progress', data.disk.percent, data.disk.percent);
+                        }
+                        
+                        // 更新流量
+                        if (data.network) {
+                            Monitor.updateText('traffic-used', data.network.total_used + ' GB');
+                            Monitor.updateText('traffic-remaining', data.network.remaining + ' GB');
+                            Monitor.updateProgress('traffic-progress', data.network.percent, data.network.percent);
+                            
+                            // 流量警告
+                            const warningDiv = document.getElementById('traffic-warning');
+                            if (data.network.percent > 80) {
+                                warningDiv.style.display = 'block';
+                            } else {
+                                warningDiv.style.display = 'none';
+                            }
+                        }
+                        
+                        // 更新连接
+                        if (data.connections) {
+                            Monitor.updateConnections(data.connections);
+                        }
+                    },
+                    
+                    error: function(xhr, status, error) {
+                        console.error('数据更新失败:', error);
+                        Monitor.retryCount++;
+                        
+                        if (Monitor.retryCount >= Monitor.config.maxRetries) {
+                            const tbody = document.getElementById('connections-tbody');
+                            if (tbody) {
+                                tbody.innerHTML = '<tr><td colspan="3" class="no-data"><i class="fas fa-exclamation-triangle"></i> 连接服务器失败，请检查网络</td></tr>';
+                            }
+                        }
+                    }
+                });
+            },
+            
+            // 初始化
+            init: function() {
+                this.updateData();
+                setInterval(() => {
+                    this.updateData();
+                }, this.config.updateInterval);
+                
+                console.log('🚀 节点监控探针已启动');
+                console.log('📊 数据更新间隔:', this.config.updateInterval / 1000, '秒');
+            }
+        };
+        
+        // 页面加载完成后启动监控
+        $(document).ready(function() {
+            Monitor.init();
+        });
+    </script>
+</body>
+</html>
+EOF
+
+    echo -e "${GREEN}✓ 前端面板生成完成${NC}"
+}
+
+# 安装 Python 依赖
+install_python_deps() {
+    echo -e "${YELLOW}[5/5] 安装 Python 依赖库...${NC}"
+    
+    # 尝试不同的安装方式
+    if command -v pip3 &> /dev/null; then
+        # 先尝试用户安装
+        pip3 install flask psutil --user 2>/dev/null || \
+        # 再尝试系统安装
+        pip3 install flask psutil --break-system-packages 2>/dev/null || \
+        # 最后尝试普通安装
+        pip3 install flask psutil
+    else
+        echo -e "${RED}错误：未找到 pip3${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ Python 依赖安装完成${NC}"
+}
+
+# 创建系统服务
+create_service() {
+    echo -e "${YELLOW}配置系统服务...${NC}"
+    
+    cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
+[Unit]
+Description=Node Traffic Monitor Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/app.py
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=node_monitor
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 启用并启动服务
+    systemctl daemon-reload
+    systemctl enable ${SERVICE_NAME}
+    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    systemctl start ${SERVICE_NAME}
+    
+    echo -e "${GREEN}✓ 系统服务配置完成${NC}"
+}
+
+# 获取服务器 IP
+get_server_ip() {
+    # 优先获取公网 IP
+    PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 icanhazip.com 2>/dev/null || echo "")
+    
+    # 获取内网 IP
+    LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1 || echo "127.0.0.1")
+    
+    if [[ -n "$PUBLIC_IP" ]]; then
+        echo "$PUBLIC_IP"
+    else
+        echo "$LOCAL_IP"
+    fi
+}
+
+# 显示安装结果
+show_result() {
+    SERVER_IP=$(get_server_ip)
+    SERVICE_STATUS=$(systemctl is-active ${SERVICE_NAME})
+    
+    echo ""
+    echo -e "${GREEN}=================================================================="
+    echo -e "                    安 装 完 成 ！"
+    echo -e "==================================================================${NC}"
+    echo ""
+    echo -e "${BLUE}📊 监控面板访问地址：${NC}"
+    echo -e "   🌐 公网访问: ${GREEN}http://${SERVER_IP}:${WEB_PORT}${NC}"
+    echo -e "   🏠 内网访问: ${GREEN}http://$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1):${WEB_PORT}${NC}"
+    echo ""
+    echo -e "${BLUE}🔧 服务管理命令：${NC}"
+    echo -e "   启动服务: ${YELLOW}systemctl start ${SERVICE_NAME}${NC}"
+    echo -e "   停止服务: ${YELLOW}systemctl stop ${SERVICE_NAME}${NC}"
+    echo -e "   重启服务: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
+    echo -e "   查看状态: ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
+    echo -e "   查看日志: ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
+    echo ""
+    echo -e "${BLUE}📁 安装目录：${NC} ${INSTALL_DIR}"
+    echo -e "${BLUE}🚀 服务状态：${NC} ${SERVICE_STATUS}"
+    echo ""
+    
+    if [[ "$SERVICE_STATUS" == "active" ]]; then
+        echo -e "${GREEN}✅ 服务运行正常！您现在可以通过浏览器访问监控面板${NC}"
+    else
+        echo -e "${RED}❌ 服务启动异常，请检查日志：journalctl -u ${SERVICE_NAME}${NC}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}💡 提示：${NC}"
+    echo -e "  - 如需修改配置，请编辑 ${INSTALL_DIR}/app.py"
+    echo -e "  - 如需卸载，请运行: systemctl stop ${SERVICE_NAME} && rm -rf ${INSTALL_DIR}"
+    echo -e "  - 防火墙放行端口: ${WEB_PORT}"
+    echo ""
+}
+
+# 主函数
+main() {
+    print_banner
+    check_privileges
+    detect_system
+    install_dependencies
+    create_project
+    create_backend
+    create_frontend
+    install_python_deps
+    create_service
+    show_result
+}
+
+# 执行主函数
+main "$@"
