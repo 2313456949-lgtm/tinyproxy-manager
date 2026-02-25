@@ -1,9 +1,8 @@
 #!/bin/bash
 
 # ============================================
-# 节点流量监控探针 - 一键安装脚本
-# 功能：服务���资源监控 + 流量统计 + 连接追踪
-# 作者：自动生成脚本
+# 出站连接监控探针 - 监控本服务器对外连接
+# 功能：服务器资源监控 + 出站连接追踪 + 流量统计
 # ============================================
 
 # 颜色定义
@@ -14,8 +13,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 配置参数
-INSTALL_DIR="/opt/node_monitor"
-SERVICE_NAME="node_monitor"
+INSTALL_DIR="/opt/outbound_monitor"
+SERVICE_NAME="outbound_monitor"
 WEB_PORT=5000
 MONTHLY_LIMIT_GB=1000
 
@@ -23,13 +22,14 @@ MONTHLY_LIMIT_GB=1000
 print_banner() {
     echo -e "${BLUE}"
     echo "=================================================================="
-    echo "              节点流量监控探针 - 自动安装程序"
+    echo "              出站连接监控探针 - 自动安装程序"
     echo "=================================================================="
     echo -e "${NC}"
     echo -e "${GREEN}功能特性：${NC}"
     echo "  📊 实时 CPU/内存监控"
     echo "  📈 月度流量统计 (${MONTHLY_LIMIT_GB}GB 额度)"
-    echo "  🌐 活跃连接 IP 追踪"
+    echo "  🌐 出站连接目标 IP 追踪"
+    echo "  🔗 代理/隧道连接监控"
     echo "  🎨 响应式 Web 面板"
     echo "  🚀 系统服务自启动"
     echo ""
@@ -69,9 +69,9 @@ install_dependencies() {
     $UPDATE_CMD
     
     if [[ $PKG_MANAGER == "apt" ]]; then
-        $INSTALL_CMD python3 python3-pip python3-venv curl psmisc net-tools
+        $INSTALL_CMD python3 python3-pip python3-venv curl psmisc net-tools iproute2 lsof
     else
-        $INSTALL_CMD python3 python3-pip curl psmisc net-tools
+        $INSTALL_CMD python3 python3-pip curl psmisc net-tools iproute2 lsof
     fi
     
     echo -e "${GREEN}✓ 系统依赖安装完成${NC}"
@@ -96,7 +96,7 @@ create_project() {
 
 # 生成后端代码
 create_backend() {
-    echo -e "${YELLOW}[3/5] 生成后端监控程序...${NC}"
+    echo -e "${YELLOW}[3/5] 生成出站连接监控程序...${NC}"
     
     cat <<'EOF' > app.py
 #!/usr/bin/env python3
@@ -105,6 +105,7 @@ create_backend() {
 import json
 import time
 import subprocess
+import re
 from datetime import datetime
 from flask import Flask, render_template, jsonify
 import psutil
@@ -155,8 +156,8 @@ class SystemMonitor:
         except:
             return {'percent': 0, 'total': 0, 'used': 0, 'free': 0}
 
-class NetworkMonitor:
-    """网络监控类"""
+class OutboundMonitor:
+    """出站连接监控类 - 重点功能"""
     
     @staticmethod
     def get_traffic_stats():
@@ -184,29 +185,147 @@ class NetworkMonitor:
             return {'sent': 0, 'received': 0, 'total_used': 0, 'remaining': 0, 'percent': 0, 'limit': CONFIG['MONTHLY_LIMIT_GB']}
     
     @staticmethod
-    def get_active_connections():
-        """获取活跃网络连接"""
+    def get_outbound_connections():
+        """获取出站连接 - 核心功能"""
         connections = {}
+        connection_details = []
+        
         try:
-            # 使用 ss 命令获取连接信息
-            cmd = "ss -ntu state established | grep -v '127.0.0.1\\|::1' | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr"
+            # 方法1: 使用 ss 命令获取出站连接
+            cmd = """ss -tuln state established | grep -E ':[0-9]+.*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' | awk '{
+                split($5, local, ":");
+                split($6, remote, ":");
+                if (local[1] != "127.0.0.1" && local[1] != "::1" && remote[1] != "127.0.0.1" && remote[1] != "::1") {
+                    print $1, local[1] ":" local[2], remote[1] ":" remote[2]
+                }
+            }'"""
+            
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
             
             for line in result.stdout.strip().split('\n'):
                 if line.strip():
                     parts = line.strip().split()
-                    if len(parts) >= 2:
-                        count = int(parts[0])
-                        ip = parts[1]
-                        if ip and ip != '0.0.0.0' and not ip.startswith('127.'):
-                            connections[ip] = count
+                    if len(parts) >= 3:
+                        protocol = parts[0]
+                        local_addr = parts[1]
+                        remote_addr = parts[2]
+                        
+                        # 提取远程IP
+                        remote_ip = remote_addr.split(':')[0] if ':' in remote_addr else remote_addr
+                        remote_port = remote_addr.split(':')[1] if ':' in remote_addr else 'unknown'
+                        
+                        # 过滤本地地址
+                        if not (remote_ip.startswith('127.') or remote_ip.startswith('192.168.') or 
+                               remote_ip.startswith('10.') or remote_ip.startswith('172.16.') or
+                               remote_ip == '::1' or remote_ip == '0.0.0.0'):
+                            
+                            if remote_ip in connections:
+                                connections[remote_ip] += 1
+                            else:
+                                connections[remote_ip] = 1
+                            
+                            # 添加详细信息
+                            connection_details.append({
+                                'protocol': protocol,
+                                'local': local_addr,
+                                'remote': remote_addr,
+                                'remote_ip': remote_ip,
+                                'remote_port': remote_port
+                            })
             
-            # 限制显示数量
+            # 方法2: 使用 netstat 作为备选 (如果 ss 没有结果)
+            if not connections:
+                cmd2 = "netstat -tn | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | grep -v '127.0.0.1' | sort | uniq -c"
+                try:
+                    result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=5)
+                    for line in result2.stdout.strip().split('\n'):
+                        if line.strip():
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                count = int(parts[0])
+                                ip = parts[1]
+                                if not (ip.startswith('192.168.') or ip.startswith('10.') or 
+                                       ip.startswith('172.16.') or ip.startswith('127.')):
+                                    connections[ip] = count
+                except:
+                    pass
+            
+            # 限制显示数量并排序
             sorted_connections = sorted(connections.items(), key=lambda x: x[1], reverse=True)
-            return sorted_connections[:CONFIG['MAX_CONNECTIONS']]
+            return sorted_connections[:CONFIG['MAX_CONNECTIONS']], connection_details[:CONFIG['MAX_CONNECTIONS']]
         
         except Exception as e:
-            print(f"连接统计错误: {e}")
+            print(f"出站连接统计错误: {e}")
+            return [], []
+    
+    @staticmethod
+    def get_proxy_connections():
+        """检测代理/隧道连接"""
+        proxy_info = {
+            'shadowsocks': [],
+            'v2ray': [],
+            'trojan': [],
+            'wireguard': [],
+            'openvpn': [],
+            'other_proxy': []
+        }
+        
+        try:
+            # 检测常见代理端口的连接
+            proxy_ports = {
+                'shadowsocks': [1080, 1081, 8080, 8081, 8388, 8389],
+                'v2ray': [10086, 8080, 443, 80, 10001, 10002],
+                'trojan': [443, 8443, 10443],
+                'wireguard': [51820, 51821],
+                'openvpn': [1194, 1195, 443]
+            }
+            
+            # 使用 lsof 检测端口使用情况
+            for proxy_type, ports in proxy_ports.items():
+                for port in ports:
+                    try:
+                        cmd = f"lsof -i :{port} -t 2>/dev/null"
+                        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                        if result.returncode == 0 and result.stdout.strip():
+                            proxy_info[proxy_type].append({
+                                'port': port,
+                                'pid': result.stdout.strip().split('\n')[0],
+                                'status': 'active'
+                            })
+                    except:
+                        continue
+            
+            return proxy_info
+        
+        except Exception as e:
+            print(f"代理连接检测错误: {e}")
+            return proxy_info
+    
+    @staticmethod
+    def get_network_interfaces():
+        """获取网络接口信息"""
+        interfaces = []
+        try:
+            for interface, addrs in psutil.net_if_addrs().items():
+                if interface != 'lo':  # 排除回环接口
+                    interface_info = {'name': interface, 'addresses': []}
+                    for addr in addrs:
+                        if addr.family == 2:  # IPv4
+                            interface_info['addresses'].append({
+                                'type': 'IPv4',
+                                'address': addr.address,
+                                'netmask': addr.netmask
+                            })
+                        elif addr.family == 10:  # IPv6
+                            interface_info['addresses'].append({
+                                'type': 'IPv6', 
+                                'address': addr.address
+                            })
+                    if interface_info['addresses']:
+                        interfaces.append(interface_info)
+            return interfaces
+        except Exception as e:
+            print(f"网络接口获取错误: {e}")
             return []
 
 class SystemInfo:
@@ -233,7 +352,7 @@ class SystemInfo:
             print(f"系统信息获取错误: {e}")
             return {
                 'hostname': '未知',
-                'uptime': '未知',
+                'uptime': '未知', 
                 'platform': '未知',
                 'boot_time': '未知',
                 'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -249,13 +368,18 @@ def index():
 def api_stats():
     """API: 获取所有监控数据"""
     try:
+        outbound_connections, connection_details = OutboundMonitor.get_outbound_connections()
+        
         data = {
             'system': SystemInfo.get_system_info(),
             'cpu': SystemMonitor.get_cpu_info(),
             'memory': SystemMonitor.get_memory_info(),
             'disk': SystemMonitor.get_disk_info(),
-            'network': NetworkMonitor.get_traffic_stats(),
-            'connections': NetworkMonitor.get_active_connections(),
+            'network': OutboundMonitor.get_traffic_stats(),
+            'outbound_connections': outbound_connections,
+            'connection_details': connection_details,
+            'proxy_info': OutboundMonitor.get_proxy_connections(),
+            'interfaces': OutboundMonitor.get_network_interfaces(),
             'timestamp': time.time()
         }
         return jsonify(data)
@@ -269,20 +393,21 @@ def api_config():
     return jsonify(CONFIG)
 
 if __name__ == '__main__':
-    print("🚀 节点监控探针启动中...")
+    print("🚀 出站连接监控探针启动中...")
     print(f"📊 Web 面板地址: http://0.0.0.0:5000")
     print(f"🔄 数据更新间隔: {CONFIG['UPDATE_INTERVAL']} 秒")
     print(f"📈 月流量限制: {CONFIG['MONTHLY_LIMIT_GB']} GB")
+    print(f"🌐 监控模式: 出站连接追踪")
     app.run(host='0.0.0.0', port=5000, debug=False)
 EOF
 
     chmod +x app.py
-    echo -e "${GREEN}✓ 后端代码生成完成${NC}"
+    echo -e "${GREEN}✓ 出站连接监控后端代码生成完成${NC}"
 }
 
 # 生成前端代码
 create_frontend() {
-    echo -e "${YELLOW}[4/5] 生成前端监控面板...${NC}"
+    echo -e "${YELLOW}[4/5] 生成出站连接监控面板...${NC}"
     
     cat <<'EOF' > templates/index.html
 <!DOCTYPE html>
@@ -290,7 +415,7 @@ create_frontend() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>节点监控探针</title>
+    <title>出站连接监控探针</title>
     <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -305,7 +430,7 @@ create_frontend() {
         }
         
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         
@@ -323,6 +448,12 @@ create_frontend() {
             color: #2c3e50;
             margin-bottom: 10px;
             font-size: 2.2em;
+        }
+        
+        .header .subtitle {
+            color: #e74c3c;
+            font-weight: bold;
+            margin-bottom: 10px;
         }
         
         .status-bar {
@@ -417,7 +548,6 @@ create_frontend() {
             height: 100%;
             border-radius: 6px;
             transition: width 0.8s ease, background-color 0.3s ease;
-            position: relative;
         }
         
         .progress-fill.low { background: linear-gradient(90deg, #27ae60, #2ecc71); }
@@ -436,7 +566,6 @@ create_frontend() {
             padding: 12px;
             text-align: left;
             font-weight: 500;
-            border-radius: 8px 8px 0 0;
         }
         
         .connections-table td {
@@ -450,12 +579,20 @@ create_frontend() {
         }
         
         .badge {
-            background: linear-gradient(45deg, #3498db, #2980b9);
+            background: linear-gradient(45deg, #e74c3c, #c0392b);
             color: white;
             padding: 4px 12px;
             border-radius: 15px;
             font-size: 0.85em;
             font-weight: bold;
+        }
+        
+        .badge.proxy {
+            background: linear-gradient(45deg, #9b59b6, #8e44ad);
+        }
+        
+        .badge.normal {
+            background: linear-gradient(45deg, #27ae60, #2ecc71);
         }
         
         .no-data {
@@ -465,17 +602,27 @@ create_frontend() {
             padding: 20px;
         }
         
-        .traffic-warning {
-            background: #fff3cd;
-            color: #856404;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 15px;
-            border-left: 4px solid #ffc107;
+        .outbound-card {
+            grid-column: 1 / -1;
         }
         
-        .connections-card {
-            grid-column: 1 / -1;
+        .proxy-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .proxy-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        }
+        
+        .proxy-item.active {
+            border-left-color: #e74c3c;
+            background: #fff3cd;
         }
         
         @media (max-width: 768px) {
@@ -502,13 +649,25 @@ create_frontend() {
             color: #7f8c8d;
             font-style: italic;
         }
+
+        .outbound-highlight {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24) !important;
+            color: white !important;
+        }
+
+        .connection-detail {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <!-- 头部信息 -->
         <div class="header">
-            <h1><i class="fas fa-server"></i> 节点监控探针</h1>
+            <h1><i class="fas fa-satellite-dish"></i> 出站连接监控探针</h1>
+            <div class="subtitle">🎯 监控本服务器对外发起的所有连接</div>
             <div class="status-bar">
                 <div class="status-item"><i class="fas fa-desktop"></i> <span id="hostname">加载中...</span></div>
                 <div class="status-item"><i class="fas fa-clock"></i> <span id="uptime">加载中...</span></div>
@@ -594,12 +753,12 @@ create_frontend() {
                 <h3><i class="fas fa-chart-line"></i> 流量统计</h3>
                 <div class="stat-grid">
                     <div class="stat-item">
-                        <div class="stat-value" id="traffic-used">0 GB</div>
-                        <div class="stat-label">已消耗</div>
+                        <div class="stat-value" id="traffic-sent">0 GB</div>
+                        <div class="stat-label">上传流量</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-value" id="traffic-remaining">0 GB</div>
-                        <div class="stat-label">剩余额度</div>
+                        <div class="stat-value" id="traffic-received">0 GB</div>
+                        <div class="stat-label">下载流量</div>
                     </div>
                 </div>
                 <div class="progress-container">
@@ -611,33 +770,42 @@ create_frontend() {
                         <div id="traffic-progress" class="progress-fill low" style="width: 0%;"></div>
                     </div>
                 </div>
-                <div id="traffic-warning" class="traffic-warning" style="display: none;">
-                    <strong>⚠️ 流量警告：</strong>月度流量使用已超过 80%，请注意控制使用量！
-                </div>
             </div>
         </div>
         
-        <!-- 连接监控 -->
-        <div class="card connections-card">
-            <h3><i class="fas fa-network-wired"></i> 活跃连接监控</h3>
+        <!-- 代理状态监控 -->
+        <div class="card">
+            <h3><i class="fas fa-shield-alt"></i> 代理/隧���状态监控</h3>
+            <div class="proxy-info" id="proxy-info">
+                <div class="loading">正在检测代理服务...</div>
+            </div>
+        </div>
+        
+        <!-- 出站连接监控 -->
+        <div class="card outbound-card">
+            <h3><i class="fas fa-globe-americas outbound-highlight"></i> 出站连接监控 (本服务器→外部)</h3>
+            <p style="color: #e74c3c; font-weight: bold; margin-bottom: 15px;">
+                <i class="fas fa-info-circle"></i> 显示本服务器主动连接到的外部IP地址
+            </p>
             <table class="connections-table">
                 <thead>
                     <tr>
-                        <th><i class="fas fa-globe"></i> 来源 IP 地址</th>
+                        <th><i class="fas fa-globe"></i> 目标 IP 地址</th>
                         <th><i class="fas fa-link"></i> 连接数量</th>
-                        <th><i class="fas fa-chart-bar"></i> 连接状态</th>
+                        <th><i class="fas fa-chart-bar"></i> 连接类型</th>
+                        <th><i class="fas fa-info-circle"></i> 详细信息</th>
                     </tr>
                 </thead>
-                <tbody id="connections-tbody">
-                    <tr><td colspan="3" class="loading">正在加载连接数据...</td></tr>
+                <tbody id="outbound-tbody">
+                    <tr><td colspan="4" class="loading">正在扫描出站连接...</td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 
     <script>
-        // 监控数据管理
-        const Monitor = {
+        // 出站连接监控管理
+        const OutboundMonitor = {
             config: {
                 updateInterval: 2000,
                 maxRetries: 3
@@ -674,26 +842,71 @@ create_frontend() {
                 }
             },
             
-            // 更新连接表格
-            updateConnections: function(connections) {
-                const tbody = document.getElementById('connections-tbody');
+            // 更新代理信息
+            updateProxyInfo: function(proxyInfo) {
+                const container = document.getElementById('proxy-info');
+                if (!container) return;
+                
+                let html = '';
+                let hasActive = false;
+                
+                for (const [proxyType, instances] of Object.entries(proxyInfo)) {
+                    if (instances && instances.length > 0) {
+                        hasActive = true;
+                        html += `
+                            <div class="proxy-item active">
+                                <strong><i class="fas fa-shield-alt"></i> ${proxyType.toUpperCase()}</strong><br>
+                                端口: ${instances.map(i => i.port).join(', ')}<br>
+                                <span class="badge proxy">运行中</span>
+                            </div>
+                        `;
+                    } else {
+                        html += `
+                            <div class="proxy-item">
+                                <strong><i class="fas fa-times-circle"></i> ${proxyType.toUpperCase()}</strong><br>
+                                <span class="badge">未检测到</span>
+                            </div>
+                        `;
+                    }
+                }
+                
+                if (!hasActive) {
+                    html = '<div class="no-data"><i class="fas fa-info-circle"></i> 未检测到运行中的代理服务</div>';
+                }
+                
+                container.innerHTML = html;
+            },
+            
+            // 更新出站连接表格
+            updateOutboundConnections: function(connections, details) {
+                const tbody = document.getElementById('outbound-tbody');
                 if (!tbody) return;
                 
                 if (!connections || connections.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" class="no-data"><i class="fas fa-info-circle"></i> 当前无外部活跃连接</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" class="no-data"><i class="fas fa-info-circle"></i> 当前无出站连接</td></tr>';
                     return;
                 }
                 
                 let html = '';
-                connections.forEach(([ip, count]) => {
-                    const statusClass = count > 10 ? 'high' : count > 5 ? 'medium' : 'low';
-                    const statusText = count > 10 ? '高频' : count > 5 ? '中等' : '正常';
+                connections.forEach(([ip, count], index) => {
+                    const isHighTraffic = count > 10;
+                    const badgeClass = isHighTraffic ? 'badge' : 'badge normal';
+                    const connectionType = isHighTraffic ? '高频连接' : '正常连接';
+                    
+                    // 查找对应的详细信息
+                    const detail = details.find(d => d.remote_ip === ip);
+                    const detailInfo = detail ? 
+                        `${detail.protocol} → ${detail.remote}` : 
+                        '连接详情获取中...';
                     
                     html += `
-                        <tr>
-                            <td><i class="fas fa-server"></i> ${ip}</td>
-                            <td><span class="badge">${count}</span></td>
-                            <td><span class="badge ${statusClass}">${statusText}</span></td>
+                        <tr ${isHighTraffic ? 'style="background-color: #fff3cd;"' : ''}>
+                            <td><i class="fas fa-server"></i> <strong>${ip}</strong></td>
+                            <td><span class="${badgeClass}">${count}</span></td>
+                            <td><span class="${badgeClass}">${connectionType}</span></td>
+                            <td>
+                                <div class="connection-detail">${detailInfo}</div>
+                            </td>
                         </tr>
                     `;
                 });
@@ -708,65 +921,62 @@ create_frontend() {
                     method: 'GET',
                     timeout: 10000,
                     success: function(data) {
-                        Monitor.retryCount = 0;
+                        OutboundMonitor.retryCount = 0;
                         
                         // 更新系统信息
                         if (data.system) {
-                            Monitor.updateText('hostname', data.system.hostname);
-                            Monitor.updateText('uptime', data.system.uptime);
-                            Monitor.updateText('current-time', data.system.current_time);
+                            OutboundMonitor.updateText('hostname', data.system.hostname);
+                            OutboundMonitor.updateText('uptime', data.system.uptime);
+                            OutboundMonitor.updateText('current-time', data.system.current_time);
                         }
                         
                         // 更新 CPU
                         if (data.cpu) {
-                            Monitor.updateText('cpu-percent', data.cpu.percent + '%');
-                            Monitor.updateText('cpu-cores', data.cpu.count);
-                            Monitor.updateProgress('cpu-progress', data.cpu.percent, data.cpu.percent);
+                            OutboundMonitor.updateText('cpu-percent', data.cpu.percent + '%');
+                            OutboundMonitor.updateText('cpu-cores', data.cpu.count);
+                            OutboundMonitor.updateProgress('cpu-progress', data.cpu.percent);
                         }
                         
                         // 更新内存
                         if (data.memory) {
-                            Monitor.updateText('mem-used', data.memory.used + ' GB');
-                            Monitor.updateText('mem-total', data.memory.total + ' GB');
-                            Monitor.updateProgress('mem-progress', data.memory.percent, data.memory.percent);
+                            OutboundMonitor.updateText('mem-used', data.memory.used + ' GB');
+                            OutboundMonitor.updateText('mem-total', data.memory.total + ' GB');
+                            OutboundMonitor.updateProgress('mem-progress', data.memory.percent);
                         }
                         
                         // 更新磁盘
                         if (data.disk) {
-                            Monitor.updateText('disk-used', data.disk.used + ' GB');
-                            Monitor.updateText('disk-total', data.disk.total + ' GB');
-                            Monitor.updateProgress('disk-progress', data.disk.percent, data.disk.percent);
+                            OutboundMonitor.updateText('disk-used', data.disk.used + ' GB');
+                            OutboundMonitor.updateText('disk-total', data.disk.total + ' GB');
+                            OutboundMonitor.updateProgress('disk-progress', data.disk.percent);
                         }
                         
                         // 更新流量
                         if (data.network) {
-                            Monitor.updateText('traffic-used', data.network.total_used + ' GB');
-                            Monitor.updateText('traffic-remaining', data.network.remaining + ' GB');
-                            Monitor.updateProgress('traffic-progress', data.network.percent, data.network.percent);
-                            
-                            // 流量警告
-                            const warningDiv = document.getElementById('traffic-warning');
-                            if (data.network.percent > 80) {
-                                warningDiv.style.display = 'block';
-                            } else {
-                                warningDiv.style.display = 'none';
-                            }
+                            OutboundMonitor.updateText('traffic-sent', data.network.sent + ' GB');
+                            OutboundMonitor.updateText('traffic-received', data.network.received + ' GB');
+                            OutboundMonitor.updateProgress('traffic-progress', data.network.percent);
                         }
                         
-                        // 更新连接
-                        if (data.connections) {
-                            Monitor.updateConnections(data.connections);
+                        // 更新代理信息
+                        if (data.proxy_info) {
+                            OutboundMonitor.updateProxyInfo(data.proxy_info);
+                        }
+                        
+                        // 更新出站连接 - 重点功能
+                        if (data.outbound_connections && data.connection_details) {
+                            OutboundMonitor.updateOutboundConnections(data.outbound_connections, data.connection_details);
                         }
                     },
                     
                     error: function(xhr, status, error) {
                         console.error('数据更新失败:', error);
-                        Monitor.retryCount++;
+                        OutboundMonitor.retryCount++;
                         
-                        if (Monitor.retryCount >= Monitor.config.maxRetries) {
-                            const tbody = document.getElementById('connections-tbody');
+                        if (OutboundMonitor.retryCount >= OutboundMonitor.config.maxRetries) {
+                            const tbody = document.getElementById('outbound-tbody');
                             if (tbody) {
-                                tbody.innerHTML = '<tr><td colspan="3" class="no-data"><i class="fas fa-exclamation-triangle"></i> 连接服务器失败，请检查网络</td></tr>';
+                                tbody.innerHTML = '<tr><td colspan="4" class="no-data"><i class="fas fa-exclamation-triangle"></i> 连接服务器失败，请检查网络</td></tr>';
                             }
                         }
                     }
@@ -780,21 +990,22 @@ create_frontend() {
                     this.updateData();
                 }, this.config.updateInterval);
                 
-                console.log('🚀 节点监控探针已启动');
+                console.log('🚀 出站连接监控探针已启动');
+                console.log('🎯 监控模式: 出站连接追踪');
                 console.log('📊 数据更新间隔:', this.config.updateInterval / 1000, '秒');
             }
         };
         
         // 页面加载完成后启动监控
         $(document).ready(function() {
-            Monitor.init();
+            OutboundMonitor.init();
         });
     </script>
 </body>
 </html>
 EOF
 
-    echo -e "${GREEN}✓ 前端面板生成完成${NC}"
+    echo -e "${GREEN}✓ 出站连接监控前端面板生成完成${NC}"
 }
 
 # 安装 Python 依赖
@@ -823,7 +1034,7 @@ create_service() {
     
     cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
 [Unit]
-Description=Node Traffic Monitor Service
+Description=Outbound Connection Monitor Service
 After=network.target
 Wants=network-online.target
 
@@ -836,7 +1047,7 @@ Restart=always
 RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=node_monitor
+SyslogIdentifier=outbound_monitor
 
 [Install]
 WantedBy=multi-user.target
@@ -873,12 +1084,17 @@ show_result() {
     
     echo ""
     echo -e "${GREEN}=================================================================="
-    echo -e "                    安 装 完 成 ！"
+    echo -e "                   出站连接监控探针安装完成！"
     echo -e "==================================================================${NC}"
     echo ""
     echo -e "${BLUE}📊 监控面板访问地址：${NC}"
     echo -e "   🌐 公网访问: ${GREEN}http://${SERVER_IP}:${WEB_PORT}${NC}"
     echo -e "   🏠 内网访问: ${GREEN}http://$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1):${WEB_PORT}${NC}"
+    echo ""
+    echo -e "${RED}🎯 监控重点：本服务器对外发起的连接${NC}"
+    echo -e "   ✅ 出站连接 IP 追踪"
+    echo -e "   ✅ 代理/隧道状态监控"
+    echo -e "   ✅ 流量方向分析"
     echo ""
     echo -e "${BLUE}🔧 服务管理命令：${NC}"
     echo -e "   启动服务: ${YELLOW}systemctl start ${SERVICE_NAME}${NC}"
@@ -892,16 +1108,17 @@ show_result() {
     echo ""
     
     if [[ "$SERVICE_STATUS" == "active" ]]; then
-        echo -e "${GREEN}✅ 服务运行正常！您现在可以通过浏览器访问监控面板${NC}"
+        echo -e "${GREEN}✅ 服务运行正常！您现在可以通过浏览器访问出站连接监控面板${NC}"
     else
         echo -e "${RED}❌ 服务启动异常，请检查日志：journalctl -u ${SERVICE_NAME}${NC}"
     fi
     
     echo ""
-    echo -e "${YELLOW}💡 提示：${NC}"
-    echo -e "  - 如需修改配置，请编辑 ${INSTALL_DIR}/app.py"
-    echo -e "  - 如需卸载，请运行: systemctl stop ${SERVICE_NAME} && rm -rf ${INSTALL_DIR}"
-    echo -e "  - 防火墙放行端口: ${WEB_PORT}"
+    echo -e "${YELLOW}💡 功能说明：${NC}"
+    echo -e "  - 🎯 出站连接监控：显示本服务器主动连接的外部IP"
+    echo -e "  - 🔍 代理检测：自动识别 SS/V2ray/Trojan 等代理"
+    echo -e "  - 📊 流量统计：区分上传/下载流量"
+    echo -e "  - 🔄 实时更新：每2秒刷新连接状态"
     echo ""
 }
 
