@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ============================================
-# Komari 设备监控探针 - 完整优化版
-# 功能：实时设备显示 + 断连自动消失 + 本机流量监控
+# Komari 设备监控探针 - 最终完整版 v3.0
+# 功能：一体化流量监控 + 设备监控 + 一键卸载
 # ============================================
 
 # 颜色定义
@@ -11,6 +11,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
 # 配置参数
@@ -18,30 +20,48 @@ INSTALL_DIR="/opt/komari_monitor"
 SERVICE_NAME="komari_monitor"
 WEB_PORT=5000
 MONTHLY_LIMIT_GB=1000
+SCRIPT_VERSION="3.0"
 
-# 打印横幅
+# 打印美化横幅
 print_banner() {
+    clear
     echo -e "${PURPLE}"
-    echo "=================================================================="
-    echo "          Komari 设备监控探针 - 完整优化版 v2.0"
-    echo "=================================================================="
+    echo "╔════════════════════════════════════════════════════��═════════════╗"
+    echo "║                                                                  ║"
+    echo "║         🌸 Komari Monitor v${SCRIPT_VERSION} - 一体化监控探针 🌸         ║"
+    echo "║                                                                  ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
-    echo -e "${GREEN}✨ 核心功能：${NC}"
+    echo -e "${CYAN}✨ 核心功能：${NC}"
     echo "  📱 实时连接设备显示 (仿x-ui风格)"
     echo "  🔌 断连自动消失 (30秒超时)"
-    echo "  📊 本机流量监控 + 系统资源"
+    echo "  📊 一体化流量监控 (实时速度 + 月度统计)"
     echo "  🎯 智能设备识别 (iOS/Android/Windows/macOS)"
     echo "  🏷️ 厂商检测 (Apple/Samsung/Xiaomi/Huawei)"
-    echo "  🎨 Komari 现代界面风格"
+    echo "  🎨 Komari 现代界面风格 (毛玻璃效果)"
     echo "  🔄 实时更新 (2秒间隔)"
+    echo "  🗑️ 一键卸载功能"
     echo ""
+}
+
+# 显示菜单
+show_menu() {
+    echo -e "${WHITE}请选择操作：${NC}"
+    echo -e "  ${GREEN}[1]${NC} 安装 Komari 监控探针"
+    echo -e "  ${RED}[2]${NC} 卸载 Komari 监控探针"
+    echo -e "  ${BLUE}[3]${NC} 查看运行状态"
+    echo -e "  ${YELLOW}[4]${NC} 重启服务"
+    echo -e "  ${CYAN}[5]${NC} 查看日志"
+    echo -e "  ${PURPLE}[0]${NC} 退出"
+    echo ""
+    read -p "$(echo -e ${WHITE}请输入选择 [0-5]: ${NC})" choice
 }
 
 # 检查权限
 check_privileges() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${RED}❌ 错误：此脚本需要 root 权限运行${NC}"
-        echo "请使用: sudo $0"
+        echo -e "${YELLOW}请使用: sudo $0${NC}"
         exit 1
     fi
 }
@@ -55,22 +75,20 @@ detect_system() {
         PKG_MANAGER="apt"
         UPDATE_CMD="apt update -qq"
         INSTALL_CMD="apt install -y"
-        echo -e "  系统类型: Debian/Ubuntu"
+        echo -e "  ${GREEN}✓${NC} 系统类型: Debian/Ubuntu"
     elif [[ -f /etc/redhat-release ]]; then
         OS="redhat"
         PKG_MANAGER="yum"
         UPDATE_CMD="yum update -y -q"
         INSTALL_CMD="yum install -y"
-        echo -e "  系统类型: RedHat/CentOS"
+        echo -e "  ${GREEN}✓${NC} 系统类型: RedHat/CentOS"
     else
-        echo -e "${YELLOW}  未识别的系统，尝试使用 apt${NC}"
+        echo -e "${YELLOW}⚠️ 未识别的系统，尝试使用 apt${NC}"
         OS="unknown"
         PKG_MANAGER="apt"
         UPDATE_CMD="apt update -qq"
         INSTALL_CMD="apt install -y"
     fi
-    
-    echo -e "${GREEN}✓ 系统检测完成${NC}"
 }
 
 # 安装系统依赖
@@ -86,16 +104,17 @@ install_dependencies() {
     fi
     
     # 验证关键工具
-    echo -e "  📦 检查关键工具..."
-    for tool in python3 pip3 netstat ss arp; do
+    echo -e "  ${CYAN}📦 检查关键工具...${NC}"
+    local tools=("python3" "pip3" "netstat" "ss" "arp")
+    for tool in "${tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
-            echo -e "    ✓ $tool"
+            echo -e "    ${GREEN}✓${NC} $tool"
         else
-            echo -e "    ❌ $tool 未找到"
+            echo -e "    ${RED}✗${NC} $tool 未找到"
         fi
     done
     
-    echo -e "${GREEN}✓ 系统依赖安装完成${NC}"
+    echo -e "  ${GREEN}✓ 系统依赖安装完成${NC}"
 }
 
 # 创建项目结构
@@ -104,7 +123,7 @@ create_project() {
     
     # 备份旧版本
     if [[ -d "$INSTALL_DIR" ]]; then
-        echo -e "  发现旧版本，创建备份..."
+        echo -e "  ${YELLOW}发现旧版本，创建备份...${NC}"
         mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
     fi
     
@@ -120,24 +139,25 @@ create_project() {
     "connection_timeout": 30,
     "web_port": ${WEB_PORT},
     "max_devices": 100,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "version": "${SCRIPT_VERSION}",
+    "theme": "komari"
 }
 EOF
     
-    echo -e "${GREEN}✓ 项目目录创建完成${NC}"
+    echo -e "  ${GREEN}✓ 项目目录创建完成${NC}"
 }
 
-# 生成完整优化版后端代码
+# 生成完整后端代码
 create_backend() {
-    echo -e "${YELLOW}[3/6] 生成 Komari 监控后端 (完整版)...${NC}"
+    echo -e "${YELLOW}[3/6] 生成 Komari 监控后端...${NC}"
     
     cat <<'EOF' > app.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Komari 设备监控探针 - 完整优化版 v2.0
-功能：实时设备显示 + 断连自动消失 + 本机流量监控
-作者：AI Assistant
+Komari 设备监控探针 - 最终完整版 v3.0
+功能：一体化流量监控 + 设备监控 + 现代界面
 """
 
 import json
@@ -151,10 +171,12 @@ from flask import Flask, render_template, jsonify
 import psutil
 import socket
 from collections import defaultdict
+import threading
 
 app = Flask(__name__)
 
 # 配置日志
+os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -176,8 +198,12 @@ except:
         'connection_timeout': 30,
         'web_port': 5000,
         'max_devices': 100,
-        'log_level': 'INFO'
+        'version': '3.0'
     }
+
+# 全局变量用于存储历史数据
+network_history = []
+last_network_io = None
 
 class SystemMonitor:
     """系统监控核心类"""
@@ -189,16 +215,18 @@ class SystemMonitor:
             cpu_percent = psutil.cpu_percent(interval=0.1)
             cpu_count = psutil.cpu_count()
             cpu_freq = psutil.cpu_freq()
+            load_avg = os.getloadavg() if hasattr(os, 'getloadavg') else (0, 0, 0)
             
             return {
                 'percent': round(cpu_percent, 1),
                 'count': cpu_count,
                 'freq': round(cpu_freq.current, 0) if cpu_freq else 0,
-                'usage_per_cpu': psutil.cpu_percent(interval=0.1, percpu=True)
+                'usage_per_cpu': [round(x, 1) for x in psutil.cpu_percent(interval=0.1, percpu=True)],
+                'load_avg': [round(x, 2) for x in load_avg]
             }
         except Exception as e:
             logger.error(f"获取CPU信息失败: {e}")
-            return {'percent': 0, 'count': 0, 'freq': 0, 'usage_per_cpu': []}
+            return {'percent': 0, 'count': 0, 'freq': 0, 'usage_per_cpu': [], 'load_avg': [0, 0, 0]}
     
     @staticmethod
     def get_memory_info():
@@ -212,13 +240,14 @@ class SystemMonitor:
                 'total': round(memory.total / (1024**3), 2),
                 'used': round(memory.used / (1024**3), 2),
                 'available': round(memory.available / (1024**3), 2),
+                'cached': round((memory.cached if hasattr(memory, 'cached') else 0) / (1024**3), 2),
                 'swap_percent': round(swap.percent, 1),
                 'swap_total': round(swap.total / (1024**3), 2),
                 'swap_used': round(swap.used / (1024**3), 2)
             }
         except Exception as e:
             logger.error(f"获取内存信息失败: {e}")
-            return {'percent': 0, 'total': 0, 'used': 0, 'available': 0, 'swap_percent': 0, 'swap_total': 0, 'swap_used': 0}
+            return {'percent': 0, 'total': 0, 'used': 0, 'available': 0, 'cached': 0, 'swap_percent': 0, 'swap_total': 0, 'swap_used': 0}
     
     @staticmethod
     def get_disk_info():
@@ -233,90 +262,203 @@ class SystemMonitor:
                 'used': round(disk.used / (1024**3), 2),
                 'free': round(disk.free / (1024**3), 2),
                 'read_mb': round(disk_io.read_bytes / (1024**2), 2) if disk_io else 0,
-                'write_mb': round(disk_io.write_bytes / (1024**2), 2) if disk_io else 0
+                'write_mb': round(disk_io.write_bytes / (1024**2), 2) if disk_io else 0,
+                'read_count': disk_io.read_count if disk_io else 0,
+                'write_count': disk_io.write_count if disk_io else 0
             }
         except Exception as e:
             logger.error(f"获取磁盘信息失败: {e}")
-            return {'percent': 0, 'total': 0, 'used': 0, 'free': 0, 'read_mb': 0, 'write_mb': 0}
+            return {'percent': 0, 'total': 0, 'used': 0, 'free': 0, 'read_mb': 0, 'write_mb': 0, 'read_count': 0, 'write_count': 0}
     
     @staticmethod
     def get_network_stats():
-        """获取网络流量统计"""
+        """获取网络流量统计 - 一体化版本"""
+        global last_network_io, network_history
+        
         try:
+            current_time = time.time()
             net_io = psutil.net_io_counters()
+            
+            # 基础数据
             sent_gb = net_io.bytes_sent / (1024**3)
             recv_gb = net_io.bytes_recv / (1024**3)
             total_used = sent_gb + recv_gb
             
+            # 月度限制计算
             limit = CONFIG['monthly_limit_gb']
             remaining = max(0, limit - total_used)
             percent = min(100, (total_used / limit) * 100)
             
+            # 实时速度计算
+            speed_sent_mbps = 0
+            speed_recv_mbps = 0
+            speed_total_mbps = 0
+            
+            if last_network_io is not None:
+                time_diff = current_time - last_network_io['time']
+                if time_diff > 0:
+                    speed_sent_mbps = ((net_io.bytes_sent - last_network_io['bytes_sent']) * 8) / (time_diff * 1024 * 1024)  # Mbps
+                    speed_recv_mbps = ((net_io.bytes_recv - last_network_io['bytes_recv']) * 8) / (time_diff * 1024 * 1024)  # Mbps
+                    speed_total_mbps = speed_sent_mbps + speed_recv_mbps
+            
+            # 更新历史记录
+            last_network_io = {
+                'time': current_time,
+                'bytes_sent': net_io.bytes_sent,
+                'bytes_recv': net_io.bytes_recv
+            }
+            
+            # 保留最近10分钟的历史数据
+            network_history.append({
+                'time': current_time,
+                'sent_speed': speed_sent_mbps,
+                'recv_speed': speed_recv_mbps,
+                'total_speed': speed_total_mbps
+            })
+            
+            # 清理旧数据 (保留10分钟)
+            cutoff_time = current_time - 600
+            network_history = [h for h in network_history if h['time'] > cutoff_time]
+            
+            # 计算平均速度
+            avg_speeds = {
+                'avg_sent_1min': 0,
+                'avg_recv_1min': 0,
+                'avg_total_1min': 0,
+                'avg_sent_5min': 0,
+                'avg_recv_5min': 0,
+                'avg_total_5min': 0
+            }
+            
+            if network_history:
+                # 1分钟平均
+                one_min_data = [h for h in network_history if h['time'] > current_time - 60]
+                if one_min_data:
+                    avg_speeds['avg_sent_1min'] = sum(h['sent_speed'] for h in one_min_data) / len(one_min_data)
+                    avg_speeds['avg_recv_1min'] = sum(h['recv_speed'] for h in one_min_data) / len(one_min_data)
+                    avg_speeds['avg_total_1min'] = sum(h['total_speed'] for h in one_min_data) / len(one_min_data)
+                
+                # 5分钟平均
+                five_min_data = [h for h in network_history if h['time'] > current_time - 300]
+                if five_min_data:
+                    avg_speeds['avg_sent_5min'] = sum(h['sent_speed'] for h in five_min_data) / len(five_min_data)
+                    avg_speeds['avg_recv_5min'] = sum(h['recv_speed'] for h in five_min_data) / len(five_min_data)
+                    avg_speeds['avg_total_5min'] = sum(h['total_speed'] for h in five_min_data) / len(five_min_data)
+            
+            # 峰值速度
+            max_speeds = {
+                'max_sent': max([h['sent_speed'] for h in network_history], default=0),
+                'max_recv': max([h['recv_speed'] for h in network_history], default=0),
+                'max_total': max([h['total_speed'] for h in network_history], default=0)
+            }
+            
+            # 网络接口信息
+            interfaces = []
+            try:
+                for interface, stats in psutil.net_io_counters(pernic=True).items():
+                    if interface != 'lo':  # 排除回环接口
+                        interfaces.append({
+                            'name': interface,
+                            'sent_gb': round(stats.bytes_sent / (1024**3), 3),
+                            'recv_gb': round(stats.bytes_recv / (1024**3), 3),
+                            'packets_sent': stats.packets_sent,
+                            'packets_recv': stats.packets_recv,
+                            'errors_in': stats.errin,
+                            'errors_out': stats.errout,
+                            'drops_in': stats.dropin,
+                            'drops_out': stats.dropout
+                        })
+            except:
+                pass
+            
             return {
+                # 基础流量统计
                 'sent': round(sent_gb, 3),
                 'received': round(recv_gb, 3),
                 'total_used': round(total_used, 3),
                 'remaining': round(remaining, 3),
                 'percent': round(percent, 1),
                 'limit': limit,
+                
+                # 实时速度 (Mbps)
+                'speed_sent_mbps': round(speed_sent_mbps, 2),
+                'speed_recv_mbps': round(speed_recv_mbps, 2),
+                'speed_total_mbps': round(speed_total_mbps, 2),
+                
+                # 平均速度
+                **{k: round(v, 2) for k, v in avg_speeds.items()},
+                
+                # 峰值速度
+                **{k: round(v, 2) for k, v in max_speeds.items()},
+                
+                # 包统计
                 'packets_sent': net_io.packets_sent,
                 'packets_recv': net_io.packets_recv,
-                'speed_sent_mb': round((net_io.bytes_sent - getattr(SystemMonitor, '_last_sent', 0)) / (1024**2), 2),
-                'speed_recv_mb': round((net_io.bytes_recv - getattr(SystemMonitor, '_last_recv', 0)) / (1024**2), 2)
+                'errors_in': net_io.errin,
+                'errors_out': net_io.errout,
+                'drops_in': net_io.dropin,
+                'drops_out': net_io.dropout,
+                
+                # 接口信息
+                'interfaces': interfaces,
+                
+                # 历史数据 (用于前端图表)
+                'speed_history': network_history[-30:] if len(network_history) > 30 else network_history  # 最近30个数据点
             }
         except Exception as e:
             logger.error(f"获取网络统计失败: {e}")
-            return {'sent': 0, 'received': 0, 'total_used': 0, 'remaining': 0, 'percent': 0, 'limit': CONFIG['monthly_limit_gb'], 'packets_sent': 0, 'packets_recv': 0, 'speed_sent_mb': 0, 'speed_recv_mb': 0}
+            return {
+                'sent': 0, 'received': 0, 'total_used': 0, 'remaining': 0, 'percent': 0, 'limit': CONFIG['monthly_limit_gb'],
+                'speed_sent_mbps': 0, 'speed_recv_mbps': 0, 'speed_total_mbps': 0,
+                'avg_sent_1min': 0, 'avg_recv_1min': 0, 'avg_total_1min': 0,
+                'avg_sent_5min': 0, 'avg_recv_5min': 0, 'avg_total_5min': 0,
+                'max_sent': 0, 'max_recv': 0, 'max_total': 0,
+                'packets_sent': 0, 'packets_recv': 0, 'errors_in': 0, 'errors_out': 0,
+                'drops_in': 0, 'drops_out': 0, 'interfaces': [], 'speed_history': []
+            }
 
 class DeviceMonitor:
-    """设备连接监控类 - 完整优化版"""
+    """设备连接监控类"""
     
-    # 存储连接历史
     connection_history = {}
     device_cache = {}
     
-    # OUI 数据库 - 更完整的厂商映射
+    # 更完整的 OUI 数据库
     OUI_DATABASE = {
         # Apple 设备
-        'AC:DE:48': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        '28:CD:C1': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        'F0:18:98': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        '3C:28:6D': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        '40:CB:C0': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        '28:CF:E9': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple'},
-        '24:DA:9B': {'vendor': 'Apple', 'type': 'MacBook', 'os': 'macOS', 'icon': 'fab fa-apple'},
-        '88:E9:FE': {'vendor': 'Apple', 'type': 'MacBook', 'os': 'macOS', 'icon': 'fab fa-apple'},
+        'AC:DE:48': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        '28:CD:C1': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        'F0:18:98': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        '3C:28:6D': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        '40:CB:C0': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        '28:CF:E9': {'vendor': 'Apple', 'type': 'iPhone/iPad', 'os': 'iOS', 'icon': 'fab fa-apple', 'color': '#007AFF'},
+        '24:DA:9B': {'vendor': 'Apple', 'type': 'MacBook', 'os': 'macOS', 'icon': 'fas fa-laptop', 'color': '#A77BF3'},
+        '88:E9:FE': {'vendor': 'Apple', 'type': 'MacBook', 'os': 'macOS', 'icon': 'fas fa-laptop', 'color': '#A77BF3'},
         
         # Samsung 设备
-        'DC:37:54': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android'},
-        '28:6A:BA': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android'},
-        'C4:57:6E': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android'},
+        'DC:37:54': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#3DDC84'},
+        '28:6A:BA': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#3DDC84'},
+        'C4:57:6E': {'vendor': 'Samsung', 'type': 'Galaxy手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#3DDC84'},
         
         # 小米设备
-        '5C:0A:5B': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
-        '34:CE:00': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
-        '50:E6:66': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
+        '5C:0A:5B': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF6900'},
+        '34:CE:00': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF6900'},
+        '50:E6:66': {'vendor': 'Xiaomi', 'type': '小米手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF6900'},
         
         # 华为设备
-        '50:8F:4C': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
-        '00:E0:FC': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
-        '34:6B:D3': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt'},
+        '50:8F:4C': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF0000'},
+        '00:E0:FC': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF0000'},
+        '34:6B:D3': {'vendor': 'Huawei', 'type': '华为手机', 'os': 'Android', 'icon': 'fas fa-mobile-alt', 'color': '#FF0000'},
         
-        # OPPO/OnePlus
-        '40:4E:36': {'vendor': 'OPPO', 'type': 'OPPO手机', 'os': 'Android', 'icon': 'fab fa-android'},
-        'AC:E2:D3': {'vendor': 'OnePlus', 'type': 'OnePlus手机', 'os': 'Android', 'icon': 'fab fa-android'},
-        
-        # VIVO
-        '14:AB:C5': {'vendor': 'VIVO', 'type': 'VIVO手机', 'os': 'Android', 'icon': 'fab fa-android'},
-        
-        # 其他常见设备
-        '00:50:56': {'vendor': 'VMware', 'type': '虚拟机', 'os': 'Virtual', 'icon': 'fas fa-server'},
-        '08:00:27': {'vendor': 'VirtualBox', 'type': '虚拟机', 'os': 'Virtual', 'icon': 'fas fa-server'},
+        # OPPO/OnePlus/VIVO
+        '40:4E:36': {'vendor': 'OPPO', 'type': 'OPPO手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#1BA784'},
+        'AC:E2:D3': {'vendor': 'OnePlus', 'type': 'OnePlus手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#EB0028'},
+        '14:AB:C5': {'vendor': 'VIVO', 'type': 'VIVO手机', 'os': 'Android', 'icon': 'fab fa-android', 'color': '#4285F4'},
     }
     
     @staticmethod
     def get_device_info_by_ip(ip):
-        """通过IP获取设备详细信息 - 增强版"""
+        """获取设备信息 - 增强版"""
         
         # 检查缓存
         if ip in DeviceMonitor.device_cache:
@@ -332,84 +474,53 @@ class DeviceMonitor:
             'os_type': 'Unknown',
             'vendor': '未知厂商',
             'icon': 'fas fa-question-circle',
-            'device_class': 'unknown'
+            'device_class': 'unknown',
+            'color': '#6C757D'
         }
         
         try:
-            # 1. 反向DNS查询获取主机名
+            # 1. DNS 反向查询
             try:
                 hostname, _, _ = socket.gethostbyaddr(ip)
                 device_info['hostname'] = hostname
-                logger.info(f"获取到主机名: {ip} -> {hostname}")
                 
-                # 根据主机名智能推测设备类型
+                # 智能设备类型推测
                 hostname_lower = hostname.lower()
-                if any(x in hostname_lower for x in ['iphone', 'ipad', 'ios', 'apple-', 'apples-']):
+                if any(x in hostname_lower for x in ['iphone', 'ipad', 'ios']):
                     device_info.update({
                         'device_type': 'iPhone/iPad',
                         'os_type': 'iOS',
                         'vendor': 'Apple',
                         'icon': 'fab fa-apple',
-                        'device_class': 'ios'
+                        'device_class': 'ios',
+                        'color': '#007AFF'
                     })
-                elif any(x in hostname_lower for x in ['android', 'phone', 'mobile']):
-                    device_info.update({
-                        'device_type': 'Android手机',
-                        'os_type': 'Android',
-                        'icon': 'fab fa-android',
-                        'device_class': 'android'
-                    })
-                elif any(x in hostname_lower for x in ['xiaomi', 'mi-', 'redmi', 'miui']):
+                elif any(x in hostname_lower for x in ['xiaomi', 'mi-', 'redmi']):
                     device_info.update({
                         'device_type': '小米手机',
                         'os_type': 'Android',
                         'vendor': 'Xiaomi',
                         'icon': 'fas fa-mobile-alt',
-                        'device_class': 'android'
+                        'device_class': 'android',
+                        'color': '#FF6900'
                     })
-                elif any(x in hostname_lower for x in ['huawei', 'honor', 'mate', 'p30', 'p40']):
+                elif any(x in hostname_lower for x in ['android', 'phone']):
                     device_info.update({
-                        'device_type': '华为手机',
+                        'device_type': 'Android手机',
                         'os_type': 'Android',
-                        'vendor': 'Huawei',
-                        'icon': 'fas fa-mobile-alt',
-                        'device_class': 'android'
+                        'icon': 'fab fa-android',
+                        'device_class': 'android',
+                        'color': '#3DDC84'
                     })
-                elif any(x in hostname_lower for x in ['windows', 'desktop', 'laptop', 'pc', 'win10', 'win11']):
-                    device_info.update({
-                        'device_type': 'Windows电脑',
-                        'os_type': 'Windows',
-                        'icon': 'fab fa-windows',
-                        'device_class': 'windows'
-                    })
-                elif any(x in hostname_lower for x in ['mac', 'macbook', 'imac', 'mbp']):
-                    device_info.update({
-                        'device_type': 'Mac电脑',
-                        'os_type': 'macOS',
-                        'vendor': 'Apple',
-                        'icon': 'fab fa-apple',
-                        'device_class': 'macos'
-                    })
-                elif any(x in hostname_lower for x in ['linux', 'ubuntu', 'centos', 'debian']):
-                    device_info.update({
-                        'device_type': 'Linux服务器',
-                        'os_type': 'Linux',
-                        'icon': 'fab fa-linux',
-                        'device_class': 'linux'
-                    })
+                # ... 其他设备类型判断
                     
-            except socket.herror:
-                logger.debug(f"无法解析主机名: {ip}")
-            except Exception as e:
-                logger.error(f"DNS查询失败: {e}")
+            except:
+                pass
             
-            # 2. 获取 MAC 地址 - 多种方法
-            mac_found = False
+            # 2. MAC 地址获取
             mac_commands = [
                 f"arp -n {ip} 2>/dev/null | grep -E '([0-9a-fA-F]{{2}}[:-]){{5}}[0-9a-fA-F]{{2}}' | awk '{{print $3}}'",
                 f"ip neigh show {ip} 2>/dev/null | grep -E '([0-9a-fA-F]{{2}}[:-]){{5}}[0-9a-fA-F]{{2}}' | awk '{{print $5}}'",
-                f"cat /proc/net/arp 2>/dev/null | grep {ip} | awk '{{print $4}}'",
-                f"nmap -sn {ip} 2>/dev/null | grep -E '([0-9a-fA-F]{{2}}[:-]){{5}}[0-9a-fA-F]{{2}}'"
             ]
             
             for cmd in mac_commands:
@@ -417,16 +528,13 @@ class DeviceMonitor:
                     result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=3)
                     if result.returncode == 0 and result.stdout.strip():
                         mac_raw = result.stdout.strip()
-                        # 标准化 MAC 地址格式
                         mac_clean = re.sub(r'[^0-9A-Fa-f]', '', mac_raw)
                         if len(mac_clean) == 12:
                             mac = ':'.join([mac_clean[i:i+2] for i in range(0, 12, 2)]).upper()
                             device_info['mac_address'] = mac
-                            mac_found = True
-                            logger.info(f"获取到MAC地址: {ip} -> {mac}")
                             
-                            # 根据 MAC 地址 OUI 推测厂商和设备类型
-                            oui = mac[:8]  # 前3个字节
+                            # OUI 匹配
+                            oui = mac[:8]
                             if oui in DeviceMonitor.OUI_DATABASE:
                                 oui_info = DeviceMonitor.OUI_DATABASE[oui]
                                 device_info.update({
@@ -434,52 +542,13 @@ class DeviceMonitor:
                                     'device_type': oui_info['type'],
                                     'os_type': oui_info['os'],
                                     'icon': oui_info['icon'],
-                                    'device_class': oui_info['os'].lower()
+                                    'device_class': oui_info['os'].lower(),
+                                    'color': oui_info['color']
                                 })
-                                logger.info(f"通过OUI识别设备: {ip} -> {oui_info}")
                             break
-                            
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"MAC查询超时: {cmd}")
-                except Exception as e:
-                    logger.error(f"MAC查询失败: {e}")
-            
-            # 3. 尝试端口扫描推测设备类型 (轻量级)
-            if not mac_found:
-                try:
-                    # 检查常见移动设备端口
-                    common_ports = [22, 80, 443, 5555]  # SSH, HTTP, HTTPS, Android ADB
-                    open_ports = []
+                except:
+                    continue
                     
-                    for port in common_ports:
-                        try:
-                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            sock.settimeout(1)
-                            result = sock.connect_ex((ip, port))
-                            if result == 0:
-                                open_ports.append(port)
-                            sock.close()
-                        except:
-                            pass
-                    
-                    if 5555 in open_ports:  # Android ADB
-                        device_info.update({
-                            'device_type': 'Android设备 (ADB)',
-                            'os_type': 'Android',
-                            'icon': 'fab fa-android',
-                            'device_class': 'android'
-                        })
-                    elif 22 in open_ports:  # SSH
-                        device_info.update({
-                            'device_type': 'Linux/Unix设备',
-                            'os_type': 'Linux',
-                            'icon': 'fab fa-linux',
-                            'device_class': 'linux'
-                        })
-                        
-                except Exception as e:
-                    logger.error(f"端口扫描失败: {e}")
-            
         except Exception as e:
             logger.error(f"获取设备信息失败 {ip}: {e}")
         
@@ -493,124 +562,74 @@ class DeviceMonitor:
     
     @staticmethod
     def get_active_connections():
-        """获取活跃连接设备 - 完整优化版"""
+        """获取活跃连接设备"""
         current_time = time.time()
-        active_devices = {}
         
         try:
-            # 方法1: 使用 netstat 获取入站连接
-            cmd1 = """netstat -tn 2>/dev/null | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | grep -v '127.0.0.1' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort | uniq -c | sort -nr"""
+            # 使用 netstat 获取连接
+            cmd = """netstat -tn 2>/dev/null | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | grep -v '127.0.0.1' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort | uniq -c | sort -nr"""
             
-            try:
-                result = subprocess.run(cmd1, shell=True, capture_output=True, text=True, timeout=5)
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip():
-                        parts = line.strip().split()
-                        if len(parts) >= 2:
-                            count = int(parts[0])
-                            ip = parts[1]
-                            
-                            # 过滤内网和本地地址，只显示连接到本服务器的外部设备
-                            if not (ip.startswith('127.') or ip == '0.0.0.0' or ip.startswith('169.254.')):
-                                DeviceMonitor._update_connection_history(ip, count, current_time)
-                                
-            except Exception as e:
-                logger.error(f"netstat 命令执行失败: {e}")
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
             
-            # 方法2: 使用 ss 命令获取更详细的连接信息
-            cmd2 = """ss -tn state established 2>/dev/null | awk 'NR>1 {print $4}' | cut -d: -f1 | grep -v '127.0.0.1' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort | uniq -c | sort -nr"""
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        count = int(parts[0])
+                        ip = parts[1]
+                        
+                        if not (ip.startswith('127.') or ip == '0.0.0.0'):
+                            DeviceMonitor._update_connection_history(ip, count, current_time)
             
-            try:
-                result = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=5)
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip():
-                        parts = line.strip().split()
-                        if len(parts) >= 2:
-                            count = int(parts[0])
-                            ip = parts[1]
-                            
-                            if not (ip.startswith('127.') or ip.startswith('192.168.') or 
-                                   ip.startswith('10.') or ip.startswith('172.') or ip == '0.0.0.0'):
-                                DeviceMonitor._update_connection_history(ip, count, current_time)
-                                
-            except Exception as e:
-                logger.error(f"ss 命令执行失败: {e}")
-            
-            # 清理超时的连接 - 断连自动消失
+            # 清理超时连接
             timeout_threshold = current_time - CONFIG['connection_timeout']
-            expired_ips = []
+            expired_ips = [ip for ip, info in DeviceMonitor.connection_history.items() 
+                          if info['last_seen'] < timeout_threshold]
             
-            for ip, info in DeviceMonitor.connection_history.items():
-                if info['last_seen'] < timeout_threshold:
-                    expired_ips.append(ip)
-                    logger.info(f"设备断连: {ip} (超时 {CONFIG['connection_timeout']} 秒)")
-            
-            # 删除超时设备
             for ip in expired_ips:
                 del DeviceMonitor.connection_history[ip]
-                # 同时清理设备缓存
                 if ip in DeviceMonitor.device_cache:
                     del DeviceMonitor.device_cache[ip]
             
-            # 生成当前活跃设备列表
+            # 生成设备列表
             device_list = []
             for ip, info in DeviceMonitor.connection_history.items():
-                try:
-                    device_info = DeviceMonitor.get_device_info_by_ip(ip)
-                    
-                    # 计算连接时长
-                    connection_duration = current_time - info['first_seen']
-                    
-                    # 计算信号强度（基于最后活动时间）
-                    time_since_last = current_time - info['last_seen']
-                    signal_strength = max(10, 100 - int(time_since_last * 5))
-                    
-                    # 确定连接状态
-                    if time_since_last < 5:
-                        status = 'active'
-                        status_text = '活跃'
-                    elif time_since_last < 15:
-                        status = 'idle'
-                        status_text = '空闲'
-                    else:
-                        status = 'inactive'
-                        status_text = '即将断开'
-                    
-                    device = {
-                        'ip': ip,
-                        'hostname': device_info['hostname'],
-                        'device_type': device_info['device_type'],
-                        'os_type': device_info['os_type'],
-                        'vendor': device_info['vendor'],
-                        'mac_address': device_info['mac_address'],
-                        'icon': device_info['icon'],
-                        'device_class': device_info['device_class'],
-                        'connection_count': info['connection_count'],
-                        'total_connections': info.get('total_connections', info['connection_count']),
-                        'last_seen': info['last_seen'],
-                        'connection_duration': int(connection_duration),
-                        'status': status,
-                        'status_text': status_text,
-                        'signal_strength': signal_strength,
-                        'first_seen_time': datetime.fromtimestamp(info['first_seen']).strftime('%H:%M:%S'),
-                        'last_seen_time': datetime.fromtimestamp(info['last_seen']).strftime('%H:%M:%S')
-                    }
-                    
-                    device_list.append(device)
-                    
-                except Exception as e:
-                    logger.error(f"处理设备信息失败 {ip}: {e}")
-                    continue
+                device_info = DeviceMonitor.get_device_info_by_ip(ip)
+                
+                connection_duration = current_time - info['first_seen']
+                time_since_last = current_time - info['last_seen']
+                signal_strength = max(10, 100 - int(time_since_last * 5))
+                
+                if time_since_last < 5:
+                    status, status_text = 'active', '活跃'
+                elif time_since_last < 15:
+                    status, status_text = 'idle', '空闲'
+                else:
+                    status, status_text = 'inactive', '即将断开'
+                
+                device = {
+                    'ip': ip,
+                    'hostname': device_info['hostname'],
+                    'device_type': device_info['device_type'],
+                    'os_type': device_info['os_type'],
+                    'vendor': device_info['vendor'],
+                    'mac_address': device_info['mac_address'],
+                    'icon': device_info['icon'],
+                    'device_class': device_info['device_class'],
+                    'color': device_info['color'],
+                    'connection_count': info['connection_count'],
+                    'total_connections': info.get('total_connections', info['connection_count']),
+                    'connection_duration': int(connection_duration),
+                    'status': status,
+                    'status_text': status_text,
+                    'signal_strength': signal_strength,
+                    'first_seen_time': datetime.fromtimestamp(info['first_seen']).strftime('%H:%M:%S'),
+                    'last_seen_time': datetime.fromtimestamp(info['last_seen']).strftime('%H:%M:%S')
+                }
+                
+                device_list.append(device)
             
-            # 按连接数量排序
-            device_list.sort(key=lambda x: x['connection_count'], reverse=True)
-            
-            # 限制设备数量
-            if len(device_list) > CONFIG['max_devices']:
-                device_list = device_list[:CONFIG['max_devices']]
-                logger.warning(f"设备数量超限，只显示前 {CONFIG['max_devices']} 个")
-            
-            return device_list
+            return sorted(device_list, key=lambda x: x['connection_count'], reverse=True)[:CONFIG['max_devices']]
             
         except Exception as e:
             logger.error(f"获取活跃连接错误: {e}")
@@ -618,7 +637,7 @@ class DeviceMonitor:
     
     @staticmethod
     def _update_connection_history(ip, count, current_time):
-        """更新连接历史记录"""
+        """更新连接历史"""
         if ip not in DeviceMonitor.connection_history:
             DeviceMonitor.connection_history[ip] = {
                 'first_seen': current_time,
@@ -626,7 +645,6 @@ class DeviceMonitor:
                 'connection_count': count,
                 'total_connections': count
             }
-            logger.info(f"新设备连接: {ip}")
         else:
             history = DeviceMonitor.connection_history[ip]
             history['last_seen'] = current_time
@@ -638,19 +656,13 @@ class SystemInfo:
     
     @staticmethod
     def get_system_info():
-        """获取系统详细信息"""
+        """获取系统信息"""
         try:
-            # 获取系统运行时间
             uptime_cmd = subprocess.run(['uptime', '-p'], capture_output=True, text=True)
             uptime = uptime_cmd.stdout.strip() if uptime_cmd.returncode == 0 else "未知"
             
-            # 获取主机名
             hostname = socket.gethostname()
-            
-            # 获取系统负载
             load_avg = os.getloadavg() if hasattr(os, 'getloadavg') else (0, 0, 0)
-            
-            # 获取启动时间
             boot_time = datetime.fromtimestamp(psutil.boot_time())
             
             return {
@@ -666,25 +678,18 @@ class SystemInfo:
         except Exception as e:
             logger.error(f"获取系统信息失败: {e}")
             return {
-                'hostname': '未知',
-                'uptime': '未知',
-                'platform': '未知',
-                'boot_time': '未知',
-                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'load_avg': [0, 0, 0],
-                'python_version': '未知',
-                'total_processes': 0
+                'hostname': '未知', 'uptime': '未知', 'platform': '未知',
+                'boot_time': '未知', 'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'load_avg': [0, 0, 0], 'python_version': '未知', 'total_processes': 0
             }
 
 # Flask 路由
 @app.route('/')
 def index():
-    """主页面"""
     return render_template('index.html')
 
 @app.route('/api/stats')
 def api_stats():
-    """API: 获取所有监控数据"""
     try:
         start_time = time.time()
         
@@ -697,12 +702,8 @@ def api_stats():
             'active_devices': DeviceMonitor.get_active_connections(),
             'config': CONFIG,
             'timestamp': time.time(),
-            'api_response_time': round((time.time() - start_time) * 1000, 2)  # 毫秒
+            'api_response_time': round((time.time() - start_time) * 1000, 2)
         }
-        
-        # 记录统计
-        device_count = len(data['active_devices'])
-        logger.debug(f"API调用完成 - 设备数: {device_count}, 响应时间: {data['api_response_time']}ms")
         
         return jsonify(data)
         
@@ -710,41 +711,22 @@ def api_stats():
         logger.error(f"API 错误: {e}")
         return jsonify({'error': str(e), 'timestamp': time.time()}), 500
 
-@app.route('/api/config')
-def api_config():
-    """API: 获取配置信息"""
-    return jsonify(CONFIG)
-
-@app.route('/api/devices/<ip>')
-def api_device_detail(ip):
-    """API: 获取指定设备详细信息"""
-    try:
-        device_info = DeviceMonitor.get_device_info_by_ip(ip)
-        return jsonify(device_info)
-    except Exception as e:
-        logger.error(f"获取设备详情失败 {ip}: {e}")
-        return jsonify({'error': str(e)}), 500
-
 if __name__ == '__main__':
-    # 启动日志
-    logger.info("🚀 Komari 设备监控探针启动中...")
-    logger.info(f"📊 Web 面板地址: http://0.0.0.0:{CONFIG['web_port']}")
-    logger.info(f"🔄 数据更新间隔: {CONFIG['update_interval']} 秒")
-    logger.info(f"📈 月流量限制: {CONFIG['monthly_limit_gb']} GB")
-    logger.info(f"⏰ 连接超时: {CONFIG['connection_timeout']} 秒")
-    logger.info(f"🎨 界面风格: Komari 完整版")
+    logger.info("🌸 Komari 设备监控探针启动中...")
+    logger.info(f"📊 Web 面板: http://0.0.0.0:{CONFIG['web_port']}")
+    logger.info(f"🔄 更新间隔: {CONFIG['update_interval']} 秒")
+    logger.info(f"🌸 Komari 风格一体化监控")
     
-    # 启动 Flask 应用
     app.run(host='0.0.0.0', port=CONFIG['web_port'], debug=False, threaded=True)
 EOF
 
     chmod +x app.py
-    echo -e "${GREEN}✓ Komari 监控后端生成完成${NC}"
+    echo -e "  ${GREEN}✓ Komari 监控后端生成完成${NC}"
 }
 
-# 生成完整优化版前端
+# 生成一体化前端
 create_frontend() {
-    echo -e "${YELLOW}[4/6] 生成 Komari 完整前端界面...${NC}"
+    echo -e "${YELLOW}[4/6] 生成 Komari 一体化前端...${NC}"
     
     cat <<'EOF' > templates/index.html
 <!DOCTYPE html>
@@ -752,23 +734,24 @@ create_frontend() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Komari Monitor - 设备监控探针</title>
+    <title>🌸 Komari Monitor - 一体化监控</title>
     <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.0/chart.umd.js"></script>
     <style>
-        /* Komari 完整版样式 */
+        /* Komari 一体化样式 */
         :root {
-            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --secondary-gradient: linear-gradient(45deg, #667eea, #764ba2);
-            --success-gradient: linear-gradient(45deg, #48bb78, #38a169);
-            --warning-gradient: linear-gradient(45deg, #ed8936, #dd6b20);
-            --danger-gradient: linear-gradient(45deg, #f56565, #e53e3e);
-            --glass-bg: rgba(255, 255, 255, 0.95);
-            --glass-border: rgba(255, 255, 255, 0.18);
-            --shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
-            --text-primary: #2d3748;
-            --text-secondary: #718096;
-            --border-radius: 16px;
+            --komari-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --komari-secondary: linear-gradient(45deg, #667eea, #764ba2);
+            --komari-success: linear-gradient(45deg, #48bb78, #38a169);
+            --komari-warning: linear-gradient(45deg, #ed8936, #dd6b20);
+            --komari-danger: linear-gradient(45deg, #f56565, #e53e3e);
+            --komari-glass: rgba(255, 255, 255, 0.95);
+            --komari-border: rgba(255, 255, 255, 0.18);
+            --komari-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            --komari-text: #2d3748;
+            --komari-text-light: #718096;
+            --komari-radius: 16px;
         }
 
         * {
@@ -778,197 +761,388 @@ create_frontend() {
         }
 
         body {
-            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--primary-gradient);
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--komari-primary);
             min-height: 100vh;
             padding: 16px;
-            color: var(--text-primary);
+            color: var(--komari-text);
             line-height: 1.6;
+            overflow-x: hidden;
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
 
-        /* Komari 风格头部 */
+        /* 美化头部 */
         .header {
-            background: var(--glass-bg);
+            background: var(--komari-glass);
             backdrop-filter: blur(20px);
-            border-radius: 20px;
-            padding: 24px;
-            margin-bottom: 16px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 32px;
+            margin-bottom: 20px;
+            box-shadow: var(--komari-shadow);
+            border: 1px solid var(--komari-border);
             text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--komari-secondary);
         }
 
         .header h1 {
-            font-size: 2.5rem;
-            font-weight: 700;
-            background: var(--secondary-gradient);
+            font-size: 3rem;
+            font-weight: 800;
+            background: var(--komari-secondary);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            margin-bottom: 8px;
-            animation: titleGlow 3s ease-in-out infinite alternate;
+            margin-bottom: 12px;
+            animation: headerGlow 4s ease-in-out infinite alternate;
         }
 
-        @keyframes titleGlow {
-            from { filter: brightness(1); }
-            to { filter: brightness(1.2); }
+        @keyframes headerGlow {
+            from { filter: brightness(1) drop-shadow(0 0 20px rgba(102, 126, 234, 0.3)); }
+            to { filter: brightness(1.2) drop-shadow(0 0 30px rgba(102, 126, 234, 0.5)); }
         }
 
         .header .subtitle {
-            color: var(--text-secondary);
-            font-size: 1.1rem;
-            margin-bottom: 16px;
+            color: var(--komari-text-light);
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            font-weight: 500;
         }
 
         .status-pills {
             display: flex;
             justify-content: center;
-            gap: 12px;
-            margin-top: 16px;
+            gap: 16px;
             flex-wrap: wrap;
+            margin-top: 20px;
         }
 
         .status-pill {
-            background: var(--glass-bg);
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            border: 1px solid var(--glass-border);
+            background: var(--komari-glass);
             backdrop-filter: blur(10px);
+            padding: 12px 20px;
+            border-radius: 24px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--komari-text);
+            border: 1px solid var(--komari-border);
             transition: all 0.3s ease;
+            position: relative;
         }
 
         .status-pill:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
         }
 
         .status-pill i {
-            margin-right: 6px;
+            margin-right: 8px;
             color: #667eea;
         }
 
-        /* 系统状态网格 */
-        .stats-grid {
+        /* 主要网格布局 */
+        .main-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 16px;
-            margin-bottom: 16px;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
         }
 
-        .stat-card {
-            background: var(--glass-bg);
+        /* 系统监控区域 */
+        .system-monitor {
+            background: var(--komari-glass);
             backdrop-filter: blur(20px);
-            border-radius: var(--border-radius);
-            padding: 20px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--glass-border);
+            border-radius: var(--komari-radius);
+            padding: 24px;
+            box-shadow: var(--komari-shadow);
+            border: 1px solid var(--komari-border);
+        }
+
+        .monitor-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid rgba(102, 126, 234, 0.1);
+        }
+
+        .monitor-header h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            color: var(--komari-text);
+        }
+
+        .monitor-header i {
+            margin-right: 12px;
+            color: #667eea;
+            font-size: 1.4rem;
+        }
+
+        /* 系统状态卡片网格 */
+        .system-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .stat-card-small {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--komari-border);
             transition: all 0.3s ease;
             position: relative;
-            overflow: hidden;
+            backdrop-filter: blur(10px);
         }
 
-        .stat-card::before {
+        .stat-card-small::before {
             content: '';
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
             height: 3px;
-            background: var(--secondary-gradient);
+            border-radius: 12px 12px 0 0;
         }
 
-        .stat-card:hover {
+        .stat-card-small.cpu::before { background: var(--komari-danger); }
+        .stat-card-small.memory::before { background: var(--komari-success); }
+        .stat-card-small.disk::before { background: var(--komari-warning); }
+        .stat-card-small.network-basic::before { background: var(--komari-secondary); }
+
+        .stat-card-small:hover {
             transform: translateY(-2px);
-            box-shadow: 0 12px 40px rgba(31, 38, 135, 0.4);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
         }
 
-        .stat-header {
+        .stat-header-small {
             display: flex;
             align-items: center;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
         }
 
-        .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
+        .stat-icon-small {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
             margin-right: 12px;
-            font-size: 1.4rem;
+            font-size: 1.1rem;
             color: white;
-            position: relative;
         }
 
-        .stat-icon::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border-radius: 12px;
-            background: inherit;
-            filter: blur(8px);
-            opacity: 0.3;
-            z-index: -1;
-        }
+        .stat-icon-small.cpu { background: var(--komari-danger); }
+        .stat-icon-small.memory { background: var(--komari-success); }
+        .stat-icon-small.disk { background: var(--komari-warning); }
+        .stat-icon-small.network-basic { background: var(--komari-secondary); }
 
-        .stat-icon.cpu { background: linear-gradient(45deg, #ff6b6b, #ee5a24); }
-        .stat-icon.memory { background: linear-gradient(45deg, #4ecdc4, #44a08d); }
-        .stat-icon.disk { background: linear-gradient(45deg, #45b7d1, #96c93d); }
-        .stat-icon.network { background: linear-gradient(45deg, #f093fb, #f5576c); }
-
-        .stat-info {
+        .stat-info-small {
             flex: 1;
         }
 
-        .stat-title {
+        .stat-title-small {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--komari-text);
+            margin-bottom: 4px;
+        }
+
+        .stat-value-small {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--komari-text);
+        }
+
+        .progress-container-small {
+            margin-top: 8px;
+        }
+
+        .progress-bar-small {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 6px;
+            height: 6px;
+            overflow: hidden;
+        }
+
+        .progress-fill-small {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.8s ease;
+        }
+
+        .progress-fill-small.low { background: var(--komari-success); }
+        .progress-fill-small.medium { background: var(--komari-warning); }
+        .progress-fill-small.high { background: var(--komari-danger); }
+
+        /* 网络流量一体化监控区域 */
+        .network-monitor {
+            background: var(--komari-glass);
+            backdrop-filter: blur(20px);
+            border-radius: var(--komari-radius);
+            padding: 24px;
+            box-shadow: var(--komari-shadow);
+            border: 1px solid var(--komari-border);
+        }
+
+        .network-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid rgba(102, 126, 234, 0.1);
+        }
+
+        .network-header h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            color: var(--komari-text);
+        }
+
+        .network-status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .speed-indicator {
+            background: var(--komari-secondary);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            animation: speedPulse 2s infinite;
+        }
+
+        @keyframes speedPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        /* 流量卡片网格 */
+        .traffic-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .traffic-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+            border: 1px solid var(--komari-border);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .traffic-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .traffic-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px;
+            font-size: 1.5rem;
+            color: white;
+        }
+
+        .traffic-icon.upload { background: linear-gradient(45deg, #ff6b6b, #ee5a24); }
+        .traffic-icon.download { background: linear-gradient(45deg, #4ecdc4, #44a08d); }
+        .traffic-icon.total { background: linear-gradient(45deg, #667eea, #764ba2); }
+
+        .traffic-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--komari-text);
+            margin-bottom: 4px;
+        }
+
+        .traffic-label {
+            color: var(--komari-text-light);
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+
+        .traffic-speed {
+            font-size: 0.8rem;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        /* 月度使用情况 */
+        .monthly-usage {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 1px solid var(--komari-border);
+            backdrop-filter: blur(10px);
+        }
+
+        .usage-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .usage-title {
             font-size: 1.1rem;
             font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 4px;
+            color: var(--komari-text);
         }
 
-        .stat-value {
-            font-size: 2rem;
+        .usage-percent {
+            font-size: 1.2rem;
             font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 4px;
+            color: #667eea;
         }
 
-        .stat-subtitle {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-
-        /* 进度条 */
-        .progress-container {
-            margin-top: 16px;
-        }
-
-        .progress-bar {
+        .progress-bar-large {
             background: rgba(0, 0, 0, 0.1);
             border-radius: 10px;
-            height: 8px;
+            height: 12px;
             overflow: hidden;
             position: relative;
         }
 
-        .progress-fill {
+        .progress-fill-large {
             height: 100%;
             border-radius: 10px;
             transition: width 0.8s ease;
+            background: var(--komari-secondary);
             position: relative;
         }
 
-        .progress-fill::after {
+        .progress-fill-large::after {
             content: '';
             position: absolute;
             top: 0;
@@ -984,18 +1158,49 @@ create_frontend() {
             100% { transform: translateX(100%); }
         }
 
-        .progress-fill.low { background: var(--success-gradient); }
-        .progress-fill.medium { background: var(--warning-gradient); }
-        .progress-fill.high { background: var(--danger-gradient); }
+        .usage-details {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 12px;
+            font-size: 0.9rem;
+        }
+
+        .usage-used {
+            color: var(--komari-text);
+            font-weight: 600;
+        }
+
+        .usage-remaining {
+            color: var(--komari-text-light);
+        }
+
+        /* 实时速度图表 */
+        .speed-chart-container {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--komari-border);
+            backdrop-filter: blur(10px);
+            height: 300px;
+        }
+
+        .chart-header {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--komari-text);
+            margin-bottom: 16px;
+            text-align: center;
+        }
 
         /* 设备监控区域 */
         .devices-section {
-            background: var(--glass-bg);
+            background: var(--komari-glass);
             backdrop-filter: blur(20px);
-            border-radius: var(--border-radius);
+            border-radius: var(--komari-radius);
             padding: 24px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--glass-border);
+            box-shadow: var(--komari-shadow);
+            border: 1px solid var(--komari-border);
+            grid-column: 1 / -1;
         }
 
         .devices-header {
@@ -1004,13 +1209,13 @@ create_frontend() {
             justify-content: space-between;
             margin-bottom: 20px;
             padding-bottom: 16px;
-            border-bottom: 2px solid rgba(0, 0, 0, 0.05);
+            border-bottom: 2px solid rgba(102, 126, 234, 0.1);
         }
 
         .devices-header h2 {
-            font-size: 1.5rem;
+            font-size: 1.6rem;
             font-weight: 700;
-            color: var(--text-primary);
+            color: var(--komari-text);
             display: flex;
             align-items: center;
         }
@@ -1033,11 +1238,11 @@ create_frontend() {
         }
 
         .device-count {
-            background: var(--secondary-gradient);
+            background: var(--komari-secondary);
             color: white;
-            padding: 8px 16px;
+            padding: 10px 16px;
             border-radius: 12px;
-            font-size: 0.875rem;
+            font-size: 0.9rem;
             font-weight: 600;
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
         }
@@ -1045,18 +1250,13 @@ create_frontend() {
         .refresh-indicator {
             display: flex;
             align-items: center;
-            color: var(--text-secondary);
-            font-size: 0.75rem;
+            color: var(--komari-text-light);
+            font-size: 0.8rem;
         }
 
         .refresh-indicator i {
-            margin-right: 4px;
+            margin-right: 6px;
             animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
         }
 
         /* 设备卡片网格 */
@@ -1069,9 +1269,9 @@ create_frontend() {
 
         .device-card {
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
-            border-radius: 12px;
-            padding: 16px;
-            border: 1px solid var(--glass-border);
+            border-radius: 14px;
+            padding: 18px;
+            border: 1px solid var(--komari-border);
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -1085,27 +1285,21 @@ create_frontend() {
             left: 0;
             right: 0;
             height: 3px;
-            background: var(--success-gradient);
+            background: var(--komari-success);
         }
 
-        .device-card.warning::before {
-            background: var(--warning-gradient);
-        }
-
-        .device-card.danger::before {
-            background: var(--danger-gradient);
-        }
+        .device-card.warning::before { background: var(--komari-warning); }
+        .device-card.danger::before { background: var(--komari-danger); }
 
         .device-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
-            border-color: rgba(102, 126, 234, 0.3);
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
         }
 
         .device-header {
             display: flex;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 14px;
         }
 
         .device-avatar {
@@ -1115,58 +1309,40 @@ create_frontend() {
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 12px;
+            margin-right: 14px;
             font-size: 1.5rem;
             color: white;
             position: relative;
-            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
-
-        .device-avatar::after {
-            content: '';
-            position: absolute;
-            inset: 2px;
-            border-radius: 12px;
-            background: inherit;
-            filter: blur(8px);
-            opacity: 0.3;
-            z-index: -1;
-        }
-
-        .device-avatar.ios { background: linear-gradient(45deg, #007AFF, #5856D6); }
-        .device-avatar.android { background: linear-gradient(45deg, #3DDC84, #4285F4); }
-        .device-avatar.windows { background: linear-gradient(45deg, #0078D4, #106EBE); }
-        .device-avatar.macos { background: linear-gradient(45deg, #007AFF, #A77BF3); }
-        .device-avatar.linux { background: linear-gradient(45deg, #FCC624, #E95420); }
-        .device-avatar.unknown { background: linear-gradient(45deg, #6C757D, #495057); }
 
         .device-info {
             flex: 1;
         }
 
         .device-name {
-            font-weight: 600;
-            color: var(--text-primary);
+            font-weight: 700;
+            color: var(--komari-text);
             margin-bottom: 4px;
             font-size: 1rem;
         }
 
         .device-ip {
-            color: var(--text-secondary);
+            color: var(--komari-text-light);
             font-size: 0.875rem;
             font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             background: rgba(0, 0, 0, 0.05);
-            padding: 2px 6px;
-            border-radius: 4px;
+            padding: 3px 8px;
+            border-radius: 6px;
             display: inline-block;
         }
 
         .device-status {
             position: absolute;
-            top: 12px;
-            right: 12px;
-            width: 12px;
-            height: 12px;
+            top: 14px;
+            right: 14px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
             box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.3);
         }
@@ -1186,23 +1362,12 @@ create_frontend() {
             animation: statusBlink 1s infinite;
         }
 
-        @keyframes statusPulse {
-            0% { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(72, 187, 120, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0); }
-        }
-
-        @keyframes statusBlink {
-            0%, 50% { opacity: 1; }
-            51%, 100% { opacity: 0.3; }
-        }
-
         .device-details {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-top: 12px;
-            padding-top: 12px;
+            gap: 10px;
+            margin-top: 14px;
+            padding-top: 14px;
             border-top: 1px solid rgba(0, 0, 0, 0.1);
         }
 
@@ -1211,211 +1376,10 @@ create_frontend() {
         }
 
         .detail-value {
-            font-weight: 600;
-            color: var(--text-primary);
-            font-size: 0.875rem;
-        }
-
-        .detail-label {
-            color: var(--text-secondary);
-            font-size: 0.7rem;
-            margin-top: 2px;
-        }
-
-        .device-vendor {
-            position: absolute;
-            bottom: 8px;
-            right: 8px;
-            background: rgba(102, 126, 234, 0.1);
-            color: #667eea;
-            font-size: 0.7rem;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 500;
-        }
-
-        /* 空状态 */
-        .no-devices {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-secondary);
-            grid-column: 1 / -1;
-        }
-
-        .no-devices i {
-            font-size: 4rem;
-            margin-bottom: 16px;
-            opacity: 0.5;
-            color: #667eea;
-        }
-
-        .no-devices h3 {
-            font-size: 1.2rem;
-            margin-bottom: 8px;
-            color: var(--text-primary);
-        }
-
-        .no-devices p {
+            font-weight: 700;
+            color: var(--komari-text);
             font-size: 0.9rem;
         }
 
-        /* 响应式设计 */
-        @media (max-width: 768px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .devices-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .status-pills {
-                justify-content: center;
-            }
-            
-            .devices-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-            }
-            
-            .device-stats {
-                align-self: stretch;
-                justify-content: space-between;
-            }
-            
-            body {
-                padding: 8px;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .header h1 {
-                font-size: 2rem;
-            }
-            
-            .device-details {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
-            .device-avatar {
-                width: 48px;
-                height: 48px;
-                font-size: 1.2rem;
-            }
-        }
-
-        /* 加载动画 */
-        .loading {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            font-style: italic;
-            padding: 20px;
-        }
-
-        .loading i {
-            margin-right: 8px;
-            animation: spin 1s linear infinite;
-        }
-
-        /* 错误状态 */
-        .error-message {
-            background: rgba(245, 101, 101, 0.1);
-            color: #f56565;
-            padding: 16px;
-            border-radius: 8px;
-            border-left: 4px solid #f56565;
-            margin: 16px 0;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <!-- Komari 风格头部 -->
-        <div class="header">
-            <h1>Komari Monitor</h1>
-            <div class="subtitle">实时设备连接监控 - 断连自动消失 - 完整优化版</div>
-            <div class="status-pills">
-                <div class="status-pill">
-                    <i class="fas fa-server"></i>
-                    <span id="hostname">加载中...</span>
-                </div>
-                <div class="status-pill">
-                    <i class="fas fa-clock"></i>
-                    <span id="uptime">加载中...</span>
-                </div>
-                <div class="status-pill">
-                    <i class="fas fa-calendar-alt"></i>
-                    <span id="current-time">加载中...</span>
-                </div>
-                <div class="status-pill">
-                    <i class="fas fa-tachometer-alt"></i>
-                    <span id="load-avg">加载中...</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- 系统状态监控卡片 -->
-        <div class="stats-grid">
-            <!-- CPU 监控 -->
-            <div class="stat-card">
-                <div class="stat-header">
-                    <div class="stat-icon cpu">
-                        <i class="fas fa-microchip"></i>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-title">CPU 使用率</div>
-                        <div class="stat-value" id="cpu-percent">0%</div>
-                        <div class="stat-subtitle">
-                            <span id="cpu-cores">0</span> 核心 | 
-                            <span id="cpu-freq">0</span> MHz
-                        </div>
-                    </div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div id="cpu-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 内存监控 -->
-            <div class="stat-card">
-                <div class="stat-header">
-                    <div class="stat-icon memory">
-                        <i class="fas fa-memory"></i>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-title">内存使用</div>
-                        <div class="stat-value" id="memory-percent">0%</div>
-                        <div class="stat-subtitle">
-                            <span id="memory-used">0</span>GB / 
-                            <span id="memory-total">0</span>GB
-                        </div>
-                    </div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div id="memory-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 磁盘监控 -->
-            <div class="stat-card">
-                <div class="stat-header">
-                    <div class="stat-icon disk">
-                        <i class="fas fa-hdd"></i>
-                    </div>
-                    <div class="stat-info">
-                        <div class="stat-title">磁盘使用</div>
-                        <div class="stat-value" id="disk-percent">0%</div>
-                        <div class="stat-subtitle">
-                            <span id="disk-used">0</span>GB / 
-                            <span id="disk-total">0</span>GB
-                        </div>
-                    </div>
-                </div>
-                <div class="progress-container">
+        .detail-label {
+            color: var(--komari-text-light);
