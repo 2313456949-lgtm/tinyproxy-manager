@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ============================================
-# 出站连接监控探针 - 监控本服务器对外连接
-# 功能：服务器资源监控 + 出站连接追踪 + 流量统计
+# 设备连接监控探针 - Komari 风格界面
+# 功能：实时显示连接设备 + 断连自动消失
 # ============================================
 
 # 颜色定义
@@ -13,8 +13,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 配置参数
-INSTALL_DIR="/opt/outbound_monitor"
-SERVICE_NAME="outbound_monitor"
+INSTALL_DIR="/opt/device_monitor"
+SERVICE_NAME="device_monitor"
 WEB_PORT=5000
 MONTHLY_LIMIT_GB=1000
 
@@ -22,29 +22,26 @@ MONTHLY_LIMIT_GB=1000
 print_banner() {
     echo -e "${BLUE}"
     echo "=================================================================="
-    echo "              出站连接监控探针 - 自动安装程序"
+    echo "              设备连接监控探针 - Komari 风格"
     echo "=================================================================="
     echo -e "${NC}"
     echo -e "${GREEN}功能特性：${NC}"
-    echo "  📊 实时 CPU/内存监控"
-    echo "  📈 月度流量统计 (${MONTHLY_LIMIT_GB}GB 额度)"
-    echo "  🌐 出站连接目标 IP 追踪"
-    echo "  🔗 代理/隧道连接监控"
-    echo "  🎨 响应式 Web 面板"
+    echo "  📱 实时连接设备显示"
+    echo "  🔌 断连自动移除"
+    echo "  📊 系统资源监控"
+    echo "  🎨 Komari 风格界面"
     echo "  🚀 系统服务自启动"
     echo ""
 }
 
-# 检查权限
+# 检查权限和系统检测函数保持不变
 check_privileges() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${RED}错误：此脚本需要 root 权限运行${NC}"
-        echo "请使用: sudo $0"
         exit 1
     fi
 }
 
-# 检测系统
 detect_system() {
     if [[ -f /etc/debian_version ]]; then
         PKG_MANAGER="apt"
@@ -55,48 +52,36 @@ detect_system() {
         UPDATE_CMD="yum update -y"
         INSTALL_CMD="yum install -y"
     else
-        echo -e "${YELLOW}警告：未识别的系统，尝试使用 apt${NC}"
         PKG_MANAGER="apt"
         UPDATE_CMD="apt update"
         INSTALL_CMD="apt install -y"
     fi
 }
 
-# 安装系统依赖
 install_dependencies() {
-    echo -e "${YELLOW}[1/5] 更新系统并安装依赖包...${NC}"
-    
+    echo -e "${YELLOW}[1/5] 安装系统依赖...${NC}"
     $UPDATE_CMD
-    
     if [[ $PKG_MANAGER == "apt" ]]; then
         $INSTALL_CMD python3 python3-pip python3-venv curl psmisc net-tools iproute2 lsof
     else
         $INSTALL_CMD python3 python3-pip curl psmisc net-tools iproute2 lsof
     fi
-    
     echo -e "${GREEN}✓ 系统依赖安装完成${NC}"
 }
 
-# 创建项目结构
 create_project() {
-    echo -e "${YELLOW}[2/5] 创建项目目录结构...${NC}"
-    
-    # 清理旧版本
+    echo -e "${YELLOW}[2/5] 创建项目目录...${NC}"
     if [[ -d "$INSTALL_DIR" ]]; then
-        echo -e "${YELLOW}发现旧版本，正在备份...${NC}"
         mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
     fi
-    
     mkdir -p "$INSTALL_DIR/templates"
-    mkdir -p "$INSTALL_DIR/static"
     cd "$INSTALL_DIR"
-    
     echo -e "${GREEN}✓ 项目目录创建完成${NC}"
 }
 
-# 生成后端代码
+# 生成 Komari 风格后端代码
 create_backend() {
-    echo -e "${YELLOW}[3/5] 生成出站连接监控程序...${NC}"
+    echo -e "${YELLOW}[3/5] 生成设备监控后端...${NC}"
     
     cat <<'EOF' > app.py
 #!/usr/bin/env python3
@@ -106,34 +91,31 @@ import json
 import time
 import subprocess
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify
 import psutil
 
 app = Flask(__name__)
 
-# 全局配置
 CONFIG = {
     'MONTHLY_LIMIT_GB': 1000,
     'UPDATE_INTERVAL': 2,
-    'MAX_CONNECTIONS': 50
+    'CONNECTION_TIMEOUT': 30  # 30秒无活动则认为断连
 }
 
 class SystemMonitor:
-    """系统监控核心类"""
+    """系统监控类"""
     
     @staticmethod
     def get_cpu_info():
-        """获取 CPU 信息"""
         return {
-            'percent': round(psutil.cpu_percent(interval=1), 1),
+            'percent': round(psutil.cpu_percent(interval=0.1), 1),
             'count': psutil.cpu_count(),
             'freq': round(psutil.cpu_freq().current, 0) if psutil.cpu_freq() else 0
         }
     
     @staticmethod
     def get_memory_info():
-        """获取内存信息"""
         memory = psutil.virtual_memory()
         return {
             'percent': round(memory.percent, 1),
@@ -144,7 +126,6 @@ class SystemMonitor:
     
     @staticmethod
     def get_disk_info():
-        """获取磁盘信息"""
         try:
             disk = psutil.disk_usage('/')
             return {
@@ -155,13 +136,9 @@ class SystemMonitor:
             }
         except:
             return {'percent': 0, 'total': 0, 'used': 0, 'free': 0}
-
-class OutboundMonitor:
-    """出站连接监控类 - 重点功能"""
     
     @staticmethod
-    def get_traffic_stats():
-        """获取网络流量统计"""
+    def get_network_stats():
         try:
             net_io = psutil.net_io_counters()
             sent_gb = net_io.bytes_sent / (1024**3)
@@ -180,234 +157,201 @@ class OutboundMonitor:
                 'percent': round(percent, 1),
                 'limit': limit
             }
-        except Exception as e:
-            print(f"流量统计错误: {e}")
+        except:
             return {'sent': 0, 'received': 0, 'total_used': 0, 'remaining': 0, 'percent': 0, 'limit': CONFIG['MONTHLY_LIMIT_GB']}
+
+class DeviceMonitor:
+    """设备连接监控类 - 仿 x-ui 风格"""
+    
+    # 存储连接历史，用于检测断连
+    connection_history = {}
     
     @staticmethod
-    def get_outbound_connections():
-        """获取出站连接 - 核心功能"""
-        connections = {}
-        connection_details = []
+    def get_device_info_by_ip(ip):
+        """通过IP获取设备信息"""
+        device_info = {
+            'ip': ip,
+            'hostname': 'Unknown',
+            'mac_address': 'Unknown',
+            'device_type': 'Unknown',
+            'os_type': 'Unknown'
+        }
         
         try:
-            # 方法1: 使用 ss 命令获取出站连接
-            cmd = """ss -tuln state established | grep -E ':[0-9]+.*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' | awk '{
-                split($5, local, ":");
-                split($6, remote, ":");
-                if (local[1] != "127.0.0.1" && local[1] != "::1" && remote[1] != "127.0.0.1" && remote[1] != "::1") {
-                    print $1, local[1] ":" local[2], remote[1] ":" remote[2]
-                }
-            }'"""
+            # 尝试反向DNS查询获取主机名
+            try:
+                import socket
+                hostname = socket.gethostbyaddr(ip)[0]
+                device_info['hostname'] = hostname
+                
+                # 根据主机名推测设备类型
+                hostname_lower = hostname.lower()
+                if any(x in hostname_lower for x in ['iphone', 'ipad', 'ios']):
+                    device_info['device_type'] = 'iOS'
+                    device_info['os_type'] = 'iOS'
+                elif any(x in hostname_lower for x in ['android', 'xiaomi', 'huawei', 'oppo', 'vivo', 'oneplus']):
+                    device_info['device_type'] = 'Android'
+                    device_info['os_type'] = 'Android'
+                elif any(x in hostname_lower for x in ['windows', 'desktop', 'laptop', 'pc']):
+                    device_info['device_type'] = 'Windows'
+                    device_info['os_type'] = 'Windows'
+                elif any(x in hostname_lower for x in ['mac', 'macbook', 'imac']):
+                    device_info['device_type'] = 'macOS'
+                    device_info['os_type'] = 'macOS'
+                elif any(x in hostname_lower for x in ['linux', 'ubuntu', 'centos']):
+                    device_info['device_type'] = 'Linux'
+                    device_info['os_type'] = 'Linux'
+            except:
+                pass
+            
+            # 尝试获取 MAC 地址
+            try:
+                arp_cmd = f"arp -n {ip} 2>/dev/null | grep -E '([0-9a-fA-F]{{2}}[:-]){{5}}[0-9a-fA-F]{{2}}' | awk '{{print $3}}'"
+                result = subprocess.run(arp_cmd, shell=True, capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and result.stdout.strip():
+                    mac = result.stdout.strip()
+                    device_info['mac_address'] = mac
+                    
+                    # 根据 MAC 地址前缀推测厂商/设备类型
+                    mac_prefixes = {
+                        'ac:de:48': 'Apple',
+                        '28:cd:c1': 'Apple',
+                        'f0:18:98': 'Apple',
+                        '3c:28:6d': 'Apple',
+                        '40:cb:c0': 'Apple',
+                        '28:cf:e9': 'Apple',
+                        'dc:37:54': 'Samsung',
+                        '28:6a:ba': 'Samsung',
+                        '5c:0a:5b': 'Xiaomi',
+                        '34:ce:00': 'Xiaomi',
+                        '50:8f:4c': 'Huawei',
+                        '00:e0:fc': 'Huawei'
+                    }
+                    
+                    mac_prefix = mac[:8].lower()
+                    for prefix, vendor in mac_prefixes.items():
+                        if mac_prefix.startswith(prefix):
+                            if vendor == 'Apple':
+                                device_info['device_type'] = 'Apple Device'
+                                device_info['os_type'] = 'iOS/macOS'
+                            elif vendor in ['Samsung']:
+                                device_info['device_type'] = 'Android Phone'
+                                device_info['os_type'] = 'Android'
+                            elif vendor in ['Xiaomi', 'Huawei']:
+                                device_info['device_type'] = 'Android Phone'
+                                device_info['os_type'] = 'Android'
+                            break
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"获取设备信息失败 {ip}: {e}")
+        
+        return device_info
+    
+    @staticmethod
+    def get_active_connections():
+        """获取活跃连接设备 - 仿 x-ui 显示方式"""
+        current_time = time.time()
+        active_devices = {}
+        
+        try:
+            # 获取当前活跃连接
+            cmd = """netstat -tn 2>/dev/null | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | grep -v '127.0.0.1' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort | uniq -c | sort -nr"""
             
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
             
             for line in result.stdout.strip().split('\n'):
                 if line.strip():
                     parts = line.strip().split()
-                    if len(parts) >= 3:
-                        protocol = parts[0]
-                        local_addr = parts[1]
-                        remote_addr = parts[2]
+                    if len(parts) >= 2:
+                        count = int(parts[0])
+                        ip = parts[1]
                         
-                        # 提取远程IP
-                        remote_ip = remote_addr.split(':')[0] if ':' in remote_addr else remote_addr
-                        remote_port = remote_addr.split(':')[1] if ':' in remote_addr else 'unknown'
-                        
-                        # 过滤本地地址
-                        if not (remote_ip.startswith('127.') or remote_ip.startswith('192.168.') or 
-                               remote_ip.startswith('10.') or remote_ip.startswith('172.16.') or
-                               remote_ip == '::1' or remote_ip == '0.0.0.0'):
-                            
-                            if remote_ip in connections:
-                                connections[remote_ip] += 1
-                            else:
-                                connections[remote_ip] = 1
-                            
-                            # 添加详细信息
-                            connection_details.append({
-                                'protocol': protocol,
-                                'local': local_addr,
-                                'remote': remote_addr,
-                                'remote_ip': remote_ip,
-                                'remote_port': remote_port
-                            })
+                        # 过滤内网和本地地址
+                        if not (ip.startswith('127.') or ip == '0.0.0.0'):
+                            # 更新连接历史
+                            DeviceMonitor.connection_history[ip] = {
+                                'last_seen': current_time,
+                                'connection_count': count,
+                                'first_seen': DeviceMonitor.connection_history.get(ip, {}).get('first_seen', current_time)
+                            }
             
-            # 方法2: 使用 netstat 作为备选 (如果 ss 没有结果)
-            if not connections:
-                cmd2 = "netstat -tn | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | grep -v '127.0.0.1' | sort | uniq -c"
-                try:
-                    result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=5)
-                    for line in result2.stdout.strip().split('\n'):
-                        if line.strip():
-                            parts = line.strip().split()
-                            if len(parts) >= 2:
-                                count = int(parts[0])
-                                ip = parts[1]
-                                if not (ip.startswith('192.168.') or ip.startswith('10.') or 
-                                       ip.startswith('172.16.') or ip.startswith('127.')):
-                                    connections[ip] = count
-                except:
-                    pass
+            # 清理超时的连接（30秒无活动）
+            timeout_threshold = current_time - CONFIG['CONNECTION_TIMEOUT']
+            expired_ips = []
             
-            # 限制显示数量并排序
-            sorted_connections = sorted(connections.items(), key=lambda x: x[1], reverse=True)
-            return sorted_connections[:CONFIG['MAX_CONNECTIONS']], connection_details[:CONFIG['MAX_CONNECTIONS']]
-        
+            for ip, info in DeviceMonitor.connection_history.items():
+                if info['last_seen'] < timeout_threshold:
+                    expired_ips.append(ip)
+            
+            for ip in expired_ips:
+                del DeviceMonitor.connection_history[ip]
+            
+            # 生成当前活跃设备列表
+            for ip, info in DeviceMonitor.connection_history.items():
+                device_info = DeviceMonitor.get_device_info_by_ip(ip)
+                
+                # 计算连接时长
+                connection_duration = current_time - info['first_seen']
+                
+                active_devices[ip] = {
+                    'ip': ip,
+                    'hostname': device_info['hostname'],
+                    'device_type': device_info['device_type'],
+                    'os_type': device_info['os_type'],
+                    'mac_address': device_info['mac_address'],
+                    'connection_count': info['connection_count'],
+                    'last_seen': info['last_seen'],
+                    'connection_duration': int(connection_duration),
+                    'status': 'online',
+                    'signal_strength': min(100, max(50, 100 - (current_time - info['last_seen']) * 10))  # 模拟信号强度
+                }
+            
+            return list(active_devices.values())
+            
         except Exception as e:
-            print(f"出站连接统计错误: {e}")
-            return [], []
-    
-    @staticmethod
-    def get_proxy_connections():
-        """检测代理/隧道连接"""
-        proxy_info = {
-            'shadowsocks': [],
-            'v2ray': [],
-            'trojan': [],
-            'wireguard': [],
-            'openvpn': [],
-            'other_proxy': []
-        }
-        
-        try:
-            # 检测常见代理端口的连接
-            proxy_ports = {
-                'shadowsocks': [1080, 1081, 8080, 8081, 8388, 8389],
-                'v2ray': [10086, 8080, 443, 80, 10001, 10002],
-                'trojan': [443, 8443, 10443],
-                'wireguard': [51820, 51821],
-                'openvpn': [1194, 1195, 443]
-            }
-            
-            # 使用 lsof 检测端口使用情况
-            for proxy_type, ports in proxy_ports.items():
-                for port in ports:
-                    try:
-                        cmd = f"lsof -i :{port} -t 2>/dev/null"
-                        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                        if result.returncode == 0 and result.stdout.strip():
-                            proxy_info[proxy_type].append({
-                                'port': port,
-                                'pid': result.stdout.strip().split('\n')[0],
-                                'status': 'active'
-                            })
-                    except:
-                        continue
-            
-            return proxy_info
-        
-        except Exception as e:
-            print(f"代理连接检测错误: {e}")
-            return proxy_info
-    
-    @staticmethod
-    def get_network_interfaces():
-        """获取网络接口信息"""
-        interfaces = []
-        try:
-            for interface, addrs in psutil.net_if_addrs().items():
-                if interface != 'lo':  # 排除回环接口
-                    interface_info = {'name': interface, 'addresses': []}
-                    for addr in addrs:
-                        if addr.family == 2:  # IPv4
-                            interface_info['addresses'].append({
-                                'type': 'IPv4',
-                                'address': addr.address,
-                                'netmask': addr.netmask
-                            })
-                        elif addr.family == 10:  # IPv6
-                            interface_info['addresses'].append({
-                                'type': 'IPv6', 
-                                'address': addr.address
-                            })
-                    if interface_info['addresses']:
-                        interfaces.append(interface_info)
-            return interfaces
-        except Exception as e:
-            print(f"网络接口获取错误: {e}")
+            print(f"获取活跃连接错误: {e}")
             return []
 
-class SystemInfo:
-    """系统信息类"""
-    
-    @staticmethod
-    def get_system_info():
-        """获取系统基础信息"""
-        try:
-            uptime_cmd = subprocess.run(['uptime', '-p'], capture_output=True, text=True)
-            uptime = uptime_cmd.stdout.strip() if uptime_cmd.returncode == 0 else "未知"
-            
-            hostname = subprocess.run(['hostname'], capture_output=True, text=True)
-            hostname = hostname.stdout.strip() if hostname.returncode == 0 else "未知"
-            
-            return {
-                'hostname': hostname,
-                'uptime': uptime,
-                'platform': f"{psutil.platform.system()} {psutil.platform.release()}",
-                'boot_time': datetime.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S'),
-                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        except Exception as e:
-            print(f"系统信息获取错误: {e}")
-            return {
-                'hostname': '未知',
-                'uptime': '未知', 
-                'platform': '未知',
-                'boot_time': '未知',
-                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-
-# Flask 路由
 @app.route('/')
 def index():
-    """主页面"""
     return render_template('index.html')
 
 @app.route('/api/stats')
 def api_stats():
-    """API: 获取所有监控数据"""
     try:
-        outbound_connections, connection_details = OutboundMonitor.get_outbound_connections()
-        
         data = {
-            'system': SystemInfo.get_system_info(),
+            'system': {
+                'hostname': subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip(),
+                'uptime': subprocess.run(['uptime', '-p'], capture_output=True, text=True).stdout.strip(),
+                'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            },
             'cpu': SystemMonitor.get_cpu_info(),
             'memory': SystemMonitor.get_memory_info(),
             'disk': SystemMonitor.get_disk_info(),
-            'network': OutboundMonitor.get_traffic_stats(),
-            'outbound_connections': outbound_connections,
-            'connection_details': connection_details,
-            'proxy_info': OutboundMonitor.get_proxy_connections(),
-            'interfaces': OutboundMonitor.get_network_interfaces(),
+            'network': SystemMonitor.get_network_stats(),
+            'active_devices': DeviceMonitor.get_active_connections(),
             'timestamp': time.time()
         }
         return jsonify(data)
     except Exception as e:
-        print(f"API 错误: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/config')
-def api_config():
-    """API: 获取配置信息"""
-    return jsonify(CONFIG)
-
 if __name__ == '__main__':
-    print("🚀 出站连接监控探针启动中...")
-    print(f"📊 Web 面板地址: http://0.0.0.0:5000")
-    print(f"🔄 数据更新间隔: {CONFIG['UPDATE_INTERVAL']} 秒")
-    print(f"📈 月流量限制: {CONFIG['MONTHLY_LIMIT_GB']} GB")
-    print(f"🌐 监控模式: 出站连接追踪")
+    print("🚀 设备连接监控探针启动中...")
+    print("🎨 界面风格: Komari")
+    print("📱 监控模式: 实时设备连接")
     app.run(host='0.0.0.0', port=5000, debug=False)
 EOF
 
     chmod +x app.py
-    echo -e "${GREEN}✓ 出站连接监控后端代码生成完成${NC}"
+    echo -e "${GREEN}✓ 设备监控后端生成完成${NC}"
 }
 
-# 生成前端代码
+# 生成 Komari 风格前端
 create_frontend() {
-    echo -e "${YELLOW}[4/5] 生成出站连接监控面板...${NC}"
+    echo -e "${YELLOW}[4/5] 生成 Komari 风格前端...${NC}"
     
     cat <<'EOF' > templates/index.html
 <!DOCTYPE html>
@@ -415,628 +359,607 @@ create_frontend() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>出站连接监控探针</title>
+    <title>Komari 设备监控</title>
     <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
+        /* Komari 风格样式 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 16px;
             color: #333;
         }
-        
+
         .container {
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
         }
-        
+
+        /* Komari 风格头部 */
         .header {
             background: rgba(255, 255, 255, 0.95);
-            padding: 20px;
-            border-radius: 16px;
-            margin-bottom: 20px;
-            text-align: center;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
-        
-        .header h1 {
-            color: #2c3e50;
-            margin-bottom: 10px;
-            font-size: 2.2em;
-        }
-        
-        .header .subtitle {
-            color: #e74c3c;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        
-        .status-bar {
-            display: flex;
-            justify-content: space-around;
-            margin-top: 15px;
-        }
-        
-        .status-item {
-            padding: 8px 15px;
-            background: #f8f9fa;
+            backdrop-filter: blur(20px);
             border-radius: 20px;
-            font-size: 0.9em;
-            color: #666;
+            padding: 24px;
+            margin-bottom: 16px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            text-align: center;
         }
-        
-        .dashboard-grid {
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .status-pills {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            flex-wrap: wrap;
+        }
+
+        .status-pill {
+            background: rgba(255, 255, 255, 0.8);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #4a5568;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        /* Komari 网格布局 */
+        .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
         }
-        
-        .card {
+
+        .stat-card {
             background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
             border-radius: 16px;
-            padding: 25px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            transition: transform 0.2s ease;
         }
-        
-        .card h3 {
-            color: #2c3e50;
-            margin-bottom: 20px;
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .stat-header {
             display: flex;
             align-items: center;
-            font-size: 1.3em;
+            margin-bottom: 16px;
         }
-        
-        .card h3 i {
-            margin-right: 10px;
-            font-size: 1.1em;
-        }
-        
-        .stat-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 15px;
-        }
-        
-        .stat-item {
-            text-align: center;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 12px;
-        }
-        
-        .stat-value {
-            font-size: 1.8em;
-            font-weight: bold;
-            color: #3498db;
-        }
-        
-        .stat-label {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-top: 5px;
-        }
-        
-        .progress-container {
-            margin: 20px 0;
-        }
-        
-        .progress-label {
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             display: flex;
-            justify-content: space-between;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 1.2rem;
+            color: white;
+        }
+
+        .stat-icon.cpu { background: linear-gradient(45deg, #ff6b6b, #ee5a24); }
+        .stat-icon.memory { background: linear-gradient(45deg, #4ecdc4, #44a08d); }
+        .stat-icon.disk { background: linear-gradient(45deg, #45b7d1, #96c93d); }
+        .stat-icon.network { background: linear-gradient(45deg, #f093fb, #f5576c); }
+
+        .stat-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1a202c;
             margin-bottom: 8px;
-            font-weight: 500;
         }
-        
+
+        .stat-subtitle {
+            color: #718096;
+            font-size: 0.875rem;
+        }
+
+        /* Komari 风格进度条 */
         .progress-bar {
-            background: #ecf0f1;
-            height: 12px;
-            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            height: 8px;
             overflow: hidden;
-            position: relative;
+            margin: 12px 0;
         }
-        
+
         .progress-fill {
             height: 100%;
-            border-radius: 6px;
-            transition: width 0.8s ease, background-color 0.3s ease;
+            border-radius: 10px;
+            transition: width 0.8s ease;
+            background: linear-gradient(90deg, #667eea, #764ba2);
         }
-        
-        .progress-fill.low { background: linear-gradient(90deg, #27ae60, #2ecc71); }
-        .progress-fill.medium { background: linear-gradient(90deg, #f39c12, #e67e22); }
-        .progress-fill.high { background: linear-gradient(90deg, #e74c3c, #c0392b); }
-        
-        .connections-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
+
+        .progress-fill.warning {
+            background: linear-gradient(90deg, #f093fb, #f5576c);
         }
-        
-        .connections-table th {
-            background: #34495e;
+
+        .progress-fill.danger {
+            background: linear-gradient(90deg, #ff6b6b, #ee5a24);
+        }
+
+        /* 设备列表 - 仿 x-ui 风格 */
+        .devices-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        .devices-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .devices-header h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+        }
+
+        .devices-header i {
+            margin-right: 12px;
+            color: #667eea;
+        }
+
+        .device-count {
+            margin-left: auto;
+            background: linear-gradient(45deg, #667eea, #764ba2);
             color: white;
-            padding: 12px;
-            text-align: left;
-            font-weight: 500;
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            font-weight: 600;
         }
-        
-        .connections-table td {
-            padding: 12px;
-            border-bottom: 1px solid #ecf0f1;
-            font-family: 'Courier New', monospace;
-        }
-        
-        .connections-table tr:hover {
-            background: #f8f9fa;
-        }
-        
-        .badge {
-            background: linear-gradient(45deg, #e74c3c, #c0392b);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 15px;
-            font-size: 0.85em;
-            font-weight: bold;
-        }
-        
-        .badge.proxy {
-            background: linear-gradient(45deg, #9b59b6, #8e44ad);
-        }
-        
-        .badge.normal {
-            background: linear-gradient(45deg, #27ae60, #2ecc71);
-        }
-        
-        .no-data {
-            text-align: center;
-            color: #95a5a6;
-            font-style: italic;
-            padding: 20px;
-        }
-        
-        .outbound-card {
-            grid-column: 1 / -1;
-        }
-        
-        .proxy-info {
+
+        .devices-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
         }
-        
-        .proxy-item {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #3498db;
+
+        .device-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
         }
-        
-        .proxy-item.active {
-            border-left-color: #e74c3c;
-            background: #fff3cd;
+
+        .device-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
         }
-        
-        @media (max-width: 768px) {
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .stat-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .status-bar {
-                flex-direction: column;
-                gap: 10px;
-            }
-            
-            body {
-                padding: 10px;
-            }
+
+        .device-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
         }
-        
-        .loading {
+
+        .device-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .device-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 1.5rem;
+            color: white;
+        }
+
+        .device-avatar.ios { background: linear-gradient(45deg, #007AFF, #5856D6); }
+        .device-avatar.android { background: linear-gradient(45deg, #3DDC84, #4285F4); }
+        .device-avatar.windows { background: linear-gradient(45deg, #0078D4, #106EBE); }
+        .device-avatar.macos { background: linear-gradient(45deg, #007AFF, #A77BF3); }
+        .device-avatar.linux { background: linear-gradient(45deg, #FCC624, #E95420); }
+        .device-avatar.unknown { background: linear-gradient(45deg, #6C757D, #495057); }
+
+        .device-info {
+            flex: 1;
+        }
+
+        .device-name {
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 4px;
+        }
+
+        .device-ip {
+            color: #718096;
+            font-size: 0.875rem;
+            font-family: monospace;
+        }
+
+        .device-status {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #48BB78;
+            box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        .device-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .device-detail {
             text-align: center;
-            color: #7f8c8d;
-            font-style: italic;
         }
 
-        .outbound-highlight {
-            background: linear-gradient(45deg, #ff6b6b, #ee5a24) !important;
-            color: white !important;
+        .detail-value {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 0.875rem;
         }
 
-        .connection-detail {
-            font-size: 0.8em;
-            color: #666;
-            margin-top: 5px;
+        .detail-label {
+            color: #718096;
+            font-size: 0.75rem;
+            margin-top: 2px;
+        }
+
+        .no-devices {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+
+        .no-devices i {
+            font-size: 3rem;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(72, 187, 120, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0); }
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .devices-grid {
+                grid-template-columns: 1fr;
+            }
+            .status-pills {
+                justify-content: center;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- 头部信息 -->
+        <!-- Komari 风格头部 -->
         <div class="header">
-            <h1><i class="fas fa-satellite-dish"></i> 出站连接监控探针</h1>
-            <div class="subtitle">🎯 监控本服务器对外发起的所有连接</div>
-            <div class="status-bar">
-                <div class="status-item"><i class="fas fa-desktop"></i> <span id="hostname">加载中...</span></div>
-                <div class="status-item"><i class="fas fa-clock"></i> <span id="uptime">加载中...</span></div>
-                <div class="status-item"><i class="fas fa-calendar"></i> <span id="current-time">加载中...</span></div>
-            </div>
-        </div>
-        
-        <div class="dashboard-grid">
-            <!-- CPU 监控 -->
-            <div class="card">
-                <h3><i class="fas fa-microchip"></i> CPU 状态</h3>
-                <div class="stat-grid">
-                    <div class="stat-item">
-                        <div class="stat-value" id="cpu-percent">0%</div>
-                        <div class="stat-label">使用率</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="cpu-cores">0</div>
-                        <div class="stat-label">核心数</div>
-                    </div>
+            <h1>Komari Monitor</h1>
+            <p style="color: #718096; margin-top: 8px;">实时设备连接监控 - 断连自动消失</p>
+            <div class="status-pills">
+                <div class="status-pill">
+                    <i class="fas fa-server"></i> <span id="hostname">加载中...</span>
                 </div>
-                <div class="progress-container">
-                    <div class="progress-label">
-                        <span>CPU 负载</span>
-                        <span id="cpu-percent-label">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="cpu-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
+                <div class="status-pill">
+                    <i class="fas fa-clock"></i> <span id="uptime">加载中...</span>
                 </div>
-            </div>
-            
-            <!-- 内存监控 -->
-            <div class="card">
-                <h3><i class="fas fa-memory"></i> 内存状态</h3>
-                <div class="stat-grid">
-                    <div class="stat-item">
-                        <div class="stat-value" id="mem-used">0 GB</div>
-                        <div class="stat-label">已使用</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="mem-total">0 GB</div>
-                        <div class="stat-label">总容量</div>
-                    </div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-label">
-                        <span>内存使用率</span>
-                        <span id="mem-percent-label">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="mem-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 磁盘监控 -->
-            <div class="card">
-                <h3><i class="fas fa-hdd"></i> 磁盘状态</h3>
-                <div class="stat-grid">
-                    <div class="stat-item">
-                        <div class="stat-value" id="disk-used">0 GB</div>
-                        <div class="stat-label">已使用</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="disk-total">0 GB</div>
-                        <div class="stat-label">总容量</div>
-                    </div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-label">
-                        <span>磁盘使用率</span>
-                        <span id="disk-percent-label">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="disk-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 流量监控 -->
-            <div class="card">
-                <h3><i class="fas fa-chart-line"></i> 流量统计</h3>
-                <div class="stat-grid">
-                    <div class="stat-item">
-                        <div class="stat-value" id="traffic-sent">0 GB</div>
-                        <div class="stat-label">上传流量</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-value" id="traffic-received">0 GB</div>
-                        <div class="stat-label">下载流量</div>
-                    </div>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-label">
-                        <span>月度流量 (1TB 限额)</span>
-                        <span id="traffic-percent-label">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div id="traffic-progress" class="progress-fill low" style="width: 0%;"></div>
-                    </div>
+                <div class="status-pill">
+                    <i class="fas fa-calendar"></i> <span id="current-time">加载中...</span>
                 </div>
             </div>
         </div>
-        
-        <!-- 代理状态监控 -->
-        <div class="card">
-            <h3><i class="fas fa-shield-alt"></i> 代理/隧���状态监控</h3>
-            <div class="proxy-info" id="proxy-info">
-                <div class="loading">正在检测代理服务...</div>
+
+        <!-- 系统状态卡片 -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon cpu">
+                        <i class="fas fa-microchip"></i>
+                    </div>
+                    <div class="stat-title">CPU 使用率</div>
+                </div>
+                <div class="stat-value" id="cpu-percent">0%</div>
+                <div class="stat-subtitle"><span id="cpu-cores">0</span> 核心</div>
+                <div class="progress-bar">
+                    <div id="cpu-progress" class="progress-fill" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon memory">
+                        <i class="fas fa-memory"></i>
+                    </div>
+                    <div class="stat-title">内存使用</div>
+                </div>
+                <div class="stat-value" id="memory-percent">0%</div>
+                <div class="stat-subtitle"><span id="memory-used">0</span>GB / <span id="memory-total">0</span>GB</div>
+                <div class="progress-bar">
+                    <div id="memory-progress" class="progress-fill" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon disk">
+                        <i class="fas fa-hdd"></i>
+                    </div>
+                    <div class="stat-title">磁盘使用</div>
+                </div>
+                <div class="stat-value" id="disk-percent">0%</div>
+                <div class="stat-subtitle"><span id="disk-used">0</span>GB / <span id="disk-total">0</span>GB</div>
+                <div class="progress-bar">
+                    <div id="disk-progress" class="progress-fill" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon network">
+                        <i class="fas fa-wifi"></i>
+                    </div>
+                    <div class="stat-title">网络流量</div>
+                </div>
+                <div class="stat-value" id="network-total">0 GB</div>
+                <div class="stat-subtitle">↑<span id="network-sent">0</span>GB ↓<span id="network-received">0</span>GB</div>
+                <div class="progress-bar">
+                    <div id="network-progress" class="progress-fill" style="width: 0%;"></div>
+                </div>
             </div>
         </div>
-        
-        <!-- 出站连接监控 -->
-        <div class="card outbound-card">
-            <h3><i class="fas fa-globe-americas outbound-highlight"></i> 出站连接监控 (本服务器→外部)</h3>
-            <p style="color: #e74c3c; font-weight: bold; margin-bottom: 15px;">
-                <i class="fas fa-info-circle"></i> 显示本服务器主动连接到的外部IP地址
-            </p>
-            <table class="connections-table">
-                <thead>
-                    <tr>
-                        <th><i class="fas fa-globe"></i> 目标 IP 地址</th>
-                        <th><i class="fas fa-link"></i> 连接数量</th>
-                        <th><i class="fas fa-chart-bar"></i> 连接类型</th>
-                        <th><i class="fas fa-info-circle"></i> 详细信息</th>
-                    </tr>
-                </thead>
-                <tbody id="outbound-tbody">
-                    <tr><td colspan="4" class="loading">正在扫描出站连接...</td></tr>
-                </tbody>
-            </table>
+
+        <!-- 设备连接列表 -->
+        <div class="devices-section">
+            <div class="devices-header">
+                <h2><i class="fas fa-mobile-alt"></i> 连接设备</h2>
+                <div class="device-count" id="device-count">0 台设备</div>
+            </div>
+            <div class="devices-grid" id="devices-grid">
+                <div class="no-devices">
+                    <i class="fas fa-wifi"></i>
+                    <div>暂无设备连接</div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        // 出站连接监控管理
-        const OutboundMonitor = {
-            config: {
-                updateInterval: 2000,
-                maxRetries: 3
+        const KomariMonitor = {
+            updateInterval: 2000,
+            
+            updateText(id, text) {
+                const element = document.getElementById(id);
+                if (element) element.textContent = text;
             },
             
-            retryCount: 0,
-            
-            // 更新进度条
-            updateProgress: function(elementId, percent, value) {
-                const progressBar = document.getElementById(elementId);
-                const label = document.getElementById(elementId.replace('-progress', '-percent-label'));
-                
-                if (progressBar && label) {
-                    progressBar.style.width = percent + '%';
-                    label.textContent = percent + '%';
-                    
-                    // 根据使用率设置颜色
-                    progressBar.className = 'progress-fill ';
-                    if (percent < 60) {
-                        progressBar.className += 'low';
-                    } else if (percent < 80) {
-                        progressBar.className += 'medium';
-                    } else {
-                        progressBar.className += 'high';
-                    }
-                }
-            },
-            
-            // 更新文本内容
-            updateText: function(elementId, text) {
-                const element = document.getElementById(elementId);
+            updateProgress(id, percent) {
+                const element = document.getElementById(id);
                 if (element) {
-                    element.textContent = text;
+                    element.style.width = percent + '%';
+                    element.className = 'progress-fill';
+                    if (percent > 80) element.classList.add('danger');
+                    else if (percent > 60) element.classList.add('warning');
                 }
             },
             
-            // 更新代理信息
-            updateProxyInfo: function(proxyInfo) {
-                const container = document.getElementById('proxy-info');
-                if (!container) return;
-                
-                let html = '';
-                let hasActive = false;
-                
-                for (const [proxyType, instances] of Object.entries(proxyInfo)) {
-                    if (instances && instances.length > 0) {
-                        hasActive = true;
-                        html += `
-                            <div class="proxy-item active">
-                                <strong><i class="fas fa-shield-alt"></i> ${proxyType.toUpperCase()}</strong><br>
-                                端口: ${instances.map(i => i.port).join(', ')}<br>
-                                <span class="badge proxy">运行中</span>
-                            </div>
-                        `;
-                    } else {
-                        html += `
-                            <div class="proxy-item">
-                                <strong><i class="fas fa-times-circle"></i> ${proxyType.toUpperCase()}</strong><br>
-                                <span class="badge">未检测到</span>
-                            </div>
-                        `;
-                    }
-                }
-                
-                if (!hasActive) {
-                    html = '<div class="no-data"><i class="fas fa-info-circle"></i> 未检测到运行中的代理服务</div>';
-                }
-                
-                container.innerHTML = html;
+            getDeviceIcon(osType) {
+                const icons = {
+                    'iOS': 'fab fa-apple',
+                    'macOS': 'fab fa-apple',
+                    'Android': 'fab fa-android',
+                    'Windows': 'fab fa-windows',
+                    'Linux': 'fab fa-linux'
+                };
+                return icons[osType] || 'fas fa-desktop';
             },
             
-            // 更新出站连接表格
-            updateOutboundConnections: function(connections, details) {
-                const tbody = document.getElementById('outbound-tbody');
-                if (!tbody) return;
+            getDeviceClass(osType) {
+                const classes = {
+                    'iOS': 'ios',
+                    'macOS': 'macos', 
+                    'Android': 'android',
+                    'Windows': 'windows',
+                    'Linux': 'linux'
+                };
+                return classes[osType] || 'unknown';
+            },
+            
+            formatDuration(seconds) {
+                if (seconds < 60) return `${seconds}秒`;
+                if (seconds < 3600) return `${Math.floor(seconds/60)}分钟`;
+                return `${Math.floor(seconds/3600)}小时`;
+            },
+            
+            updateDevices(devices) {
+                const grid = document.getElementById('devices-grid');
+                const count = document.getElementById('device-count');
                 
-                if (!connections || connections.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="no-data"><i class="fas fa-info-circle"></i> 当前无出站连接</td></tr>';
+                count.textContent = `${devices.length} 台设备`;
+                
+                if (devices.length === 0) {
+                    grid.innerHTML = `
+                        <div class="no-devices">
+                            <i class="fas fa-wifi"></i>
+                            <div>暂无设备连接</div>
+                        </div>
+                    `;
                     return;
                 }
                 
-                let html = '';
-                connections.forEach(([ip, count], index) => {
-                    const isHighTraffic = count > 10;
-                    const badgeClass = isHighTraffic ? 'badge' : 'badge normal';
-                    const connectionType = isHighTraffic ? '高频连接' : '正常连接';
-                    
-                    // 查找对应的详细信息
-                    const detail = details.find(d => d.remote_ip === ip);
-                    const detailInfo = detail ? 
-                        `${detail.protocol} → ${detail.remote}` : 
-                        '连接详情获取中...';
-                    
-                    html += `
-                        <tr ${isHighTraffic ? 'style="background-color: #fff3cd;"' : ''}>
-                            <td><i class="fas fa-server"></i> <strong>${ip}</strong></td>
-                            <td><span class="${badgeClass}">${count}</span></td>
-                            <td><span class="${badgeClass}">${connectionType}</span></td>
-                            <td>
-                                <div class="connection-detail">${detailInfo}</div>
-                            </td>
-                        </tr>
-                    `;
-                });
+                const html = devices.map(device => `
+                    <div class="device-card">
+                        <div class="device-status"></div>
+                        <div class="device-header">
+                            <div class="device-avatar ${this.getDeviceClass(device.os_type)}">
+                                <i class="${this.getDeviceIcon(device.os_type)}"></i>
+                            </div>
+                            <div class="device-info">
+                                <div class="device-name">${device.hostname !== 'Unknown' ? device.hostname : device.device_type}</div>
+                                <div class="device-ip">${device.ip}</div>
+                            </div>
+                        </div>
+                        <div class="device-details">
+                            <div class="device-detail">
+                                <div class="detail-value">${device.connection_count}</div>
+                                <div class="detail-label">连接数</div>
+                            </div>
+                            <div class="device-detail">
+                                <div class="detail-value">${this.formatDuration(device.connection_duration)}</div>
+                                <div class="detail-label">连接时长</div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
                 
-                tbody.innerHTML = html;
+                grid.innerHTML = html;
             },
             
-            // 获取并更新数据
-            updateData: function() {
+            updateData() {
                 $.ajax({
                     url: '/api/stats',
                     method: 'GET',
                     timeout: 10000,
-                    success: function(data) {
-                        OutboundMonitor.retryCount = 0;
-                        
+                    success: (data) => {
                         // 更新系统信息
                         if (data.system) {
-                            OutboundMonitor.updateText('hostname', data.system.hostname);
-                            OutboundMonitor.updateText('uptime', data.system.uptime);
-                            OutboundMonitor.updateText('current-time', data.system.current_time);
+                            this.updateText('hostname', data.system.hostname);
+                            this.updateText('uptime', data.system.uptime);
+                            this.updateText('current-time', data.system.current_time);
                         }
                         
                         // 更新 CPU
                         if (data.cpu) {
-                            OutboundMonitor.updateText('cpu-percent', data.cpu.percent + '%');
-                            OutboundMonitor.updateText('cpu-cores', data.cpu.count);
-                            OutboundMonitor.updateProgress('cpu-progress', data.cpu.percent);
+                            this.updateText('cpu-percent', data.cpu.percent + '%');
+                            this.updateText('cpu-cores', data.cpu.count);
+                            this.updateProgress('cpu-progress', data.cpu.percent);
                         }
                         
                         // 更新内存
                         if (data.memory) {
-                            OutboundMonitor.updateText('mem-used', data.memory.used + ' GB');
-                            OutboundMonitor.updateText('mem-total', data.memory.total + ' GB');
-                            OutboundMonitor.updateProgress('mem-progress', data.memory.percent);
+                            this.updateText('memory-percent', data.memory.percent + '%');
+                            this.updateText('memory-used', data.memory.used);
+                            this.updateText('memory-total', data.memory.total);
+                            this.updateProgress('memory-progress', data.memory.percent);
                         }
                         
                         // 更新磁盘
                         if (data.disk) {
-                            OutboundMonitor.updateText('disk-used', data.disk.used + ' GB');
-                            OutboundMonitor.updateText('disk-total', data.disk.total + ' GB');
-                            OutboundMonitor.updateProgress('disk-progress', data.disk.percent);
+                            this.updateText('disk-percent', data.disk.percent + '%');
+                            this.updateText('disk-used', data.disk.used);
+                            this.updateText('disk-total', data.disk.total);
+                            this.updateProgress('disk-progress', data.disk.percent);
                         }
                         
-                        // 更新流量
+                        // 更新网络
                         if (data.network) {
-                            OutboundMonitor.updateText('traffic-sent', data.network.sent + ' GB');
-                            OutboundMonitor.updateText('traffic-received', data.network.received + ' GB');
-                            OutboundMonitor.updateProgress('traffic-progress', data.network.percent);
+                            this.updateText('network-total', data.network.total_used + ' GB');
+                            this.updateText('network-sent', data.network.sent);
+                            this.updateText('network-received', data.network.received);
+                            this.updateProgress('network-progress', data.network.percent);
                         }
                         
-                        // 更新代理信息
-                        if (data.proxy_info) {
-                            OutboundMonitor.updateProxyInfo(data.proxy_info);
-                        }
-                        
-                        // 更新出站连接 - 重点功能
-                        if (data.outbound_connections && data.connection_details) {
-                            OutboundMonitor.updateOutboundConnections(data.outbound_connections, data.connection_details);
+                        // 更新设备列表
+                        if (data.active_devices) {
+                            this.updateDevices(data.active_devices);
                         }
                     },
-                    
-                    error: function(xhr, status, error) {
+                    error: (xhr, status, error) => {
                         console.error('数据更新失败:', error);
-                        OutboundMonitor.retryCount++;
-                        
-                        if (OutboundMonitor.retryCount >= OutboundMonitor.config.maxRetries) {
-                            const tbody = document.getElementById('outbound-tbody');
-                            if (tbody) {
-                                tbody.innerHTML = '<tr><td colspan="4" class="no-data"><i class="fas fa-exclamation-triangle"></i> 连接服务器失败，请检查网络</td></tr>';
-                            }
-                        }
                     }
                 });
             },
             
-            // 初始化
-            init: function() {
+            init() {
                 this.updateData();
-                setInterval(() => {
-                    this.updateData();
-                }, this.config.updateInterval);
-                
-                console.log('🚀 出站连接监控探针已启动');
-                console.log('🎯 监控模式: 出站连接追踪');
-                console.log('📊 数据更新间隔:', this.config.updateInterval / 1000, '秒');
+                setInterval(() => this.updateData(), this.updateInterval);
+                console.log('🎨 Komari 监控面板已启动');
             }
         };
         
-        // 页面加载完成后启动监控
-        $(document).ready(function() {
-            OutboundMonitor.init();
-        });
+        $(document).ready(() => KomariMonitor.init());
     </script>
 </body>
 </html>
 EOF
 
-    echo -e "${GREEN}✓ 出站连接监控前端面板生成完成${NC}"
+    echo -e "${GREEN}✓ Komari 风格前端生成完成${NC}"
 }
 
-# 安装 Python 依赖
 install_python_deps() {
-    echo -e "${YELLOW}[5/5] 安装 Python 依赖库...${NC}"
-    
-    # 尝试不同的安装方式
-    if command -v pip3 &> /dev/null; then
-        # 先尝试用户安装
-        pip3 install flask psutil --user 2>/dev/null || \
-        # 再尝试系统安装
-        pip3 install flask psutil --break-system-packages 2>/dev/null || \
-        # 最后尝试普通安装
-        pip3 install flask psutil
-    else
-        echo -e "${RED}错误：未找到 pip3${NC}"
-        exit 1
-    fi
-    
+    echo -e "${YELLOW}[5/5] 安装 Python 依赖...${NC}"
+    pip3 install flask psutil --user 2>/dev/null || \
+    pip3 install flask psutil --break-system-packages 2>/dev/null || \
+    pip3 install flask psutil
     echo -e "${GREEN}✓ Python 依赖安装完成${NC}"
 }
 
-# 创建系统服务
 create_service() {
     echo -e "${YELLOW}配置系统服务...${NC}"
     
     cat <<EOF > /etc/systemd/system/${SERVICE_NAME}.service
 [Unit]
-Description=Outbound Connection Monitor Service
+Description=Komari Device Monitor Service
 After=network.target
-Wants=network-online.target
 
 [Service]
 Type=simple
@@ -1045,84 +968,45 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=/usr/bin/python3 ${INSTALL_DIR}/app.py
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=outbound_monitor
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # 启用并启动服务
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME}
-    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
-    systemctl start ${SERVICE_NAME}
-    
+    systemctl restart ${SERVICE_NAME}
     echo -e "${GREEN}✓ 系统服务配置完成${NC}"
 }
 
-# 获取服务器 IP
 get_server_ip() {
-    # 优先获取公网 IP
-    PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 icanhazip.com 2>/dev/null || echo "")
-    
-    # 获取内网 IP
+    PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "")
     LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1 || echo "127.0.0.1")
-    
-    if [[ -n "$PUBLIC_IP" ]]; then
-        echo "$PUBLIC_IP"
-    else
-        echo "$LOCAL_IP"
-    fi
+    echo "${PUBLIC_IP:-$LOCAL_IP}"
 }
 
-# 显示安装结果
 show_result() {
     SERVER_IP=$(get_server_ip)
     SERVICE_STATUS=$(systemctl is-active ${SERVICE_NAME})
     
     echo ""
     echo -e "${GREEN}=================================================================="
-    echo -e "                   出站连接监控探针安装完成！"
+    echo -e "                 Komari 设备监控探针安装完成！"
     echo -e "==================================================================${NC}"
     echo ""
-    echo -e "${BLUE}📊 监控面板访问地址：${NC}"
-    echo -e "   🌐 公网访问: ${GREEN}http://${SERVER_IP}:${WEB_PORT}${NC}"
-    echo -e "   🏠 内网访问: ${GREEN}http://$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1):${WEB_PORT}${NC}"
+    echo -e "${BLUE}🎨 监控面板访问地址：${NC}"
+    echo -e "   🌐 ${GREEN}http://${SERVER_IP}:${WEB_PORT}${NC}"
     echo ""
-    echo -e "${RED}🎯 监控重点：本服务器对外发起的连接${NC}"
-    echo -e "   ✅ 出站连接 IP 追踪"
-    echo -e "   ✅ 代理/隧道状态监控"
-    echo -e "   ✅ 流量方向分析"
+    echo -e "${YELLOW}✨ Komari 风格特性：${NC}"
+    echo -e "   📱 实时显示连接设备"
+    echo -e "   🔄 断连自动消失 (30秒超时)"
+    echo -e "   🎯 设备类型识别 (iOS/Android/Windows/macOS)"
+    echo -e "   💫 流畅动画效果"
     echo ""
-    echo -e "${BLUE}🔧 服务管理命令：${NC}"
-    echo -e "   启动服务: ${YELLOW}systemctl start ${SERVICE_NAME}${NC}"
-    echo -e "   停止服务: ${YELLOW}systemctl stop ${SERVICE_NAME}${NC}"
-    echo -e "   重启服务: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
-    echo -e "   查看状态: ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
-    echo -e "   查看日志: ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
-    echo ""
-    echo -e "${BLUE}📁 安装目录：${NC} ${INSTALL_DIR}"
     echo -e "${BLUE}🚀 服务状态：${NC} ${SERVICE_STATUS}"
-    echo ""
-    
-    if [[ "$SERVICE_STATUS" == "active" ]]; then
-        echo -e "${GREEN}✅ 服务运行正常！您现在可以通过浏览器访问出站连接监控面板${NC}"
-    else
-        echo -e "${RED}❌ 服务启动异常，请检查日志：journalctl -u ${SERVICE_NAME}${NC}"
-    fi
-    
-    echo ""
-    echo -e "${YELLOW}💡 功能说明：${NC}"
-    echo -e "  - 🎯 出站连接监控：显示本服务器主动连接的外部IP"
-    echo -e "  - 🔍 代理检测：自动识别 SS/V2ray/Trojan 等代理"
-    echo -e "  - 📊 流量统计：区分上传/下载流量"
-    echo -e "  - 🔄 实时更新：每2秒刷新连接状态"
     echo ""
 }
 
-# 主函数
 main() {
     print_banner
     check_privileges
@@ -1136,5 +1020,4 @@ main() {
     show_result
 }
 
-# 执行主函数
 main "$@"
