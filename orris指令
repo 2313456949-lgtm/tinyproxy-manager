@@ -28,3 +28,9 @@ tail -f /var/log/orris/*.log
 
 #升级下载系统指令
 docker compose pull
+
+
+Environment="HTTP_PROXY=http://10.10.10.10:3128"（找到这个位置修改这添加）
+Environment="HTTPS_PROXY=http://10.10.10.10:3128"（找到这个位置修改这添加）
+上面这个位置下面添加下面这行：
+Environment="NO_PROXY=localhost,127.0.0.1,169.254.169.254,metadata.tencentyun.com,mirrors.tencentyun.com"
